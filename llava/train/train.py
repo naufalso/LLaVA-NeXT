@@ -58,7 +58,7 @@ IS_TOKENIZER_GREATER_THAN_0_14 = version.parse(tokenizers.__version__) >= versio
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
-    model_class_name: Optional[str] = field(default=None, metadata={"help": "Used to init model class, format is XXXXForCausalLM. e.g. currently XXXX is chosen from LlavaLlama, LlavaMixtral, LlavaMistral, Llama"})
+    model_class_name: Optional[str] = field(default=None, metadata={"help": "Used to init model class, format is XXXXForCausalLM. e.g. currently XXXX is chosen from LlavaLlama, LlavaMixtral, LlavaMistral, LlavaQwen3, Llama"})
 
     mm_tunable_parts: Optional[str] = field(
         default=None, metadata={"help": 'Could be "mm_mlp_adapter", "mm_vision_resampler", "mm_vision_tower,mm_mlp_adapter,mm_language_model", "mm_vision_tower,mm_mlp_adapter,mm_language_model", "mm_mlp_adapter,mm_language_model"'}
@@ -1405,7 +1405,16 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
                 **customized_kwargs,
             )
         elif "qwen" in model_args.model_name_or_path.lower():
-            if "moe" in model_args.model_name_or_path.lower() or "A14B" in model_args.model_name_or_path:
+            if "qwen3" in model_args.model_name_or_path.lower():
+                model = LlavaQwen3ForCausalLM.from_pretrained(
+                    model_args.model_name_or_path,
+                    cache_dir=training_args.cache_dir,
+                    attn_implementation=training_args.attn_implementation,
+                    torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                    low_cpu_mem_usage=False,
+                    **customized_kwargs,
+                )
+            elif "moe" in model_args.model_name_or_path.lower() or "A14B" in model_args.model_name_or_path:
                 model = LlavaQwenMoeForCausalLM.from_pretrained(
                     model_args.model_name_or_path,
                     cache_dir=training_args.cache_dir,
