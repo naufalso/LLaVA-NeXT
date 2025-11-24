@@ -39,7 +39,7 @@ class LlavaApertusConfig(ApertusConfig):
 class LlavaApertusModel(LlavaMetaModel, ApertusModel):
     config_class = LlavaApertusConfig
 
-    def __init__(self, config: ApertusConfig):
+    def __init__(self, config: LlavaApertusConfig):
         super(LlavaApertusModel, self).__init__(config)
 
 
@@ -76,7 +76,7 @@ class LlavaApertusForCausalLM(ApertusForCausalLM, LlavaMetaForCausalLM):
         image_sizes: Optional[List[List[int]]] = None,
         return_dict: Optional[bool] = None,
         modalities: Optional[List[str]] = ["image"],
-        dpo_forward: Optional[bool] = None,
+        dpo_forward: Optional[bool] = False,
         cache_position=None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
 
