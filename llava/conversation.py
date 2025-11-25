@@ -20,6 +20,7 @@ class SeparatorStyle(Enum):
     LLAMA_3 = auto()
     QWEN = auto()
     GEMMA = auto()
+    APERTUS = auto()
 
 
 @dataclasses.dataclass
@@ -172,6 +173,26 @@ class Conversation:
                     ret += message + seps[i % 2]
                 else:
                     ret += ""
+
+        elif self.sep_style == SeparatorStyle.APERTUS:
+            # Apertus uses special tokens: <|system_start|>, <|system_end|>, <|user_start|>, <|user_end|>, <|assistant_start|>, <|assistant_end|>
+            ret = ""
+            if self.system:
+                ret = "<|system_start|>" + self.system + "<|system_end|>"
+            for role, message in messages:
+                if message:
+                    if type(message) is tuple:
+                        message, _, _ = message
+                    if role == self.roles[0]:  # user
+                        ret += "<|user_start|>" + message + "<|user_end|>"
+                    else:  # assistant
+                        ret += "<|assistant_start|>" + message + "<|assistant_end|>"
+                else:
+                    if role == self.roles[0]:  # user
+                        ret += "<|user_start|>"
+                    else:  # assistant
+                        ret += "<|assistant_start|>"
+
         else:
             raise ValueError(f"Invalid style: {self.sep_style}")
 
@@ -563,16 +584,17 @@ Answer the questions.""",
 )
 
 conv_apertus_instruct = Conversation(
-    system="You are a helpful language and vision assistant. "
+    system="You are Apertus, a helpful assistant created by the SwissAI initiative. "
     "You are able to understand the visual content that the user provides, "
     "and assist the user with a variety of tasks using natural language.",
-    roles=("USER", "ASSISTANT"),
+    roles=("user", "assistant"),
     version="apertus",
     messages=[],
     offset=0,
-    sep_style=SeparatorStyle.LLAMA_2,
-    sep="<s>",
-    sep2="</s>",
+    sep_style=SeparatorStyle.APERTUS,
+    sep="<|assistant_end|>",
+    sep2="<|user_end|>",
+    stop_str="<|assistant_end|>",
 )
 
 default_conversation = conv_vicuna_v0

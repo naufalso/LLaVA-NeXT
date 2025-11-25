@@ -481,6 +481,95 @@ def preprocess_llama_2(sources, tokenizer: transformers.PreTrainedTokenizer, has
     )
 
 
+def preprocess_apertus(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False,
+    max_len=2048,
+    system_message: str = "You are Apertus, a helpful assistant created by the SwissAI initiative.",
+) -> Dict:
+    """
+    Preprocess for Apertus model using its specific chat template with tokens:
+    <|system_start|>, <|system_end|>, <|user_start|>, <|user_end|>, <|assistant_start|>, <|assistant_end|>
+    """
+    roles = {"human": "user", "gpt": "assistant"}
+
+    # Add image token to tokenizer as a special token
+    # Use a deepcopy of tokenizer so that we don't modify the tokenizer
+    tokenizer = copy.deepcopy(tokenizer)
+    # When there is actually an image, we add the image token as a special token
+    if has_image:
+        tokenizer.add_tokens(["<image>"], special_tokens=True)
+
+    image_token_index = tokenizer.convert_tokens_to_ids("<image>")
+
+    # Get special token ids for Apertus
+    system_start_id = tokenizer.convert_tokens_to_ids("<|system_start|>")
+    system_end_id = tokenizer.convert_tokens_to_ids("<|system_end|>")
+    user_start_id = tokenizer.convert_tokens_to_ids("<|user_start|>")
+    user_end_id = tokenizer.convert_tokens_to_ids("<|user_end|>")
+    assistant_start_id = tokenizer.convert_tokens_to_ids("<|assistant_start|>")
+    assistant_end_id = tokenizer.convert_tokens_to_ids("<|assistant_end|>")
+
+    # Tokens to unmask (special tokens that should be predicted)
+    unmask_tokens_idx = [system_start_id, system_end_id, user_start_id, user_end_id, assistant_start_id, assistant_end_id]
+
+    # Apply prompt templates
+    input_ids, targets = [], []
+    for i, source in enumerate(sources):
+        if roles[source[0]["from"]] != roles["human"]:
+            source = source[1:]
+
+        input_id, target = [], []
+
+        # Build system message
+        system_tokens = tokenizer("<|system_start|>" + system_message + "<|system_end|>", add_special_tokens=False).input_ids
+        input_id += system_tokens
+        target += [IGNORE_INDEX] * len(system_tokens)
+
+        for conv in source:
+            # Make sure llava data can load
+            try:
+                role = conv["role"]
+                content = conv["content"]
+            except:
+                role = conv["from"]
+                content = conv["value"]
+
+            role = roles.get(role, role)
+
+            if role == "user":
+                # User message - mask it
+                user_tokens = tokenizer("<|user_start|>" + content + "<|user_end|>", add_special_tokens=False).input_ids
+                input_id += user_tokens
+                target += [IGNORE_INDEX] * len(user_tokens)
+            else:
+                # Assistant message - don't mask it (we want to predict this)
+                assistant_tokens = tokenizer("<|assistant_start|>" + content + "<|assistant_end|>", add_special_tokens=False).input_ids
+                input_id += assistant_tokens
+                target += assistant_tokens
+
+        assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
+
+        # Unmask special tokens and replace image tokens
+        for idx, encode_id in enumerate(input_id):
+            if encode_id in unmask_tokens_idx:
+                target[idx] = encode_id
+            if encode_id == image_token_index:
+                input_id[idx] = IMAGE_TOKEN_INDEX
+
+        input_ids.append(input_id)
+        targets.append(target)
+
+    input_ids = torch.tensor(input_ids, dtype=torch.long)
+    targets = torch.tensor(targets, dtype=torch.long)
+
+    return dict(
+        input_ids=input_ids,  # tensor(bs x seq_len)
+        labels=targets,  # tensor(bs x seq_len)
+    )
+
+
 def preprocess_gemma(sources: List[List[Dict[str, str]]], tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
     conv: conversation_lib.Conversation = conversation_lib.default_conversation.copy()
     roles: Dict[str, str] = {"human": conv.roles[0], "gpt": conv.roles[1]}
@@ -927,7 +1016,7 @@ def preprocess(sources: Sequence[str], tokenizer: transformers.PreTrainedTokeniz
     if conversation_lib.default_conversation.version == "llama_v3":
         return preprocess_llama3(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version == "apertus":
-        return preprocess_llama_2(sources, tokenizer, has_image=has_image)
+        return preprocess_apertus(sources, tokenizer, has_image=has_image)
     # add end signal and concatenate together
     conversations = []
     for source in sources:
