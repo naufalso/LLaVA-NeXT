@@ -562,6 +562,19 @@ Answer the questions.""",
     sep="<|im_end|>",
 )
 
+conv_apertus_instruct = Conversation(
+    system="You are a helpful language and vision assistant. "
+    "You are able to understand the visual content that the user provides, "
+    "and assist the user with a variety of tasks using natural language.",
+    roles=("USER", "ASSISTANT"),
+    version="apertus",
+    messages=[],
+    offset=0,
+    sep_style=SeparatorStyle.LLAMA_2,
+    sep="<s>",
+    sep2="</s>",
+)
+
 default_conversation = conv_vicuna_v0
 conv_templates = {
     "default": conv_vicuna_v0,
@@ -590,6 +603,8 @@ conv_templates = {
     "qwen_2": conv_qwen,
     "qwen_2_5": conv_qwen_2_5,
     "gemma_instruct": conv_gemma_instruct,
+    "apertus": conv_apertus_instruct,
+    "apertus_instruct": conv_apertus_instruct,
 }
 
 

@@ -926,6 +926,8 @@ def preprocess(sources: Sequence[str], tokenizer: transformers.PreTrainedTokeniz
         return preprocess_gemma(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version == "llama_v3":
         return preprocess_llama3(sources, tokenizer, has_image=has_image)
+    if conversation_lib.default_conversation.version == "apertus":
+        return preprocess_llama_2(sources, tokenizer, has_image=has_image)
     # add end signal and concatenate together
     conversations = []
     for source in sources:
@@ -1435,6 +1437,15 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
                 low_cpu_mem_usage=False,
                 **customized_kwargs,
             )
+        elif "apertus" in model_args.model_name_or_path.lower():
+            model = LlavaApertusForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=training_args.attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                low_cpu_mem_usage=False,
+                **customized_kwargs,
+            )
         else:
             raise ValueError(f"Unknown model class {model_args}")
     else:
@@ -1550,6 +1561,13 @@ def train(attn_implementation=None):
             model_max_length=training_args.model_max_length,
             padding_side="right",
             use_fast=False,
+        )
+    elif "apertus" in model_args.model_name_or_path.lower():
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            model_args.model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            model_max_length=training_args.model_max_length,
+            padding_side="right",
         )
 
     rank0_print(f"Prompt version: {model_args.version}")
