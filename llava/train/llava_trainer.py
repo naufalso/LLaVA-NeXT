@@ -1,3 +1,4 @@
+import functools
 import os
 import torch
 import torch.nn as nn
@@ -536,8 +537,35 @@ class LLaVATrainer(Trainer):
         rank0_print("Setting NCCL timeout to INF to avoid running errors.")
 
         # create accelerator object
+        dispatch_batches = getattr(self.args, "dispatch_batches", None)
+        split_batches = getattr(self.args, "split_batches", False)
+        deepspeed_plugin = getattr(self.args, "deepspeed_plugin", None)
+
+        accelerate_args = {}
+
+        if dispatch_batches:
+            accelerate_args["dispatch_batches"] = dispatch_batches
+        if split_batches:
+            accelerate_args["split_batches"] = split_batches
+        if deepspeed_plugin is not None:
+            accelerate_args["deepspeed_plugin"] = deepspeed_plugin
+
+        # Try to get from accelerator_config if available
+        accelerator_config = getattr(self.args, "accelerator_config", None)
+        if accelerator_config is not None:
+             if isinstance(accelerator_config, dict):
+                 if dispatch_batches is None:
+                     dispatch_batches = accelerator_config.get("dispatch_batches", None)
+                 if split_batches is None:
+                     split_batches = accelerator_config.get("split_batches", False)
+             elif hasattr(accelerator_config, "dispatch_batches"):
+                 if dispatch_batches is None:
+                     dispatch_batches = accelerator_config.dispatch_batches
+                 if split_batches is None:
+                     split_batches = accelerator_config.split_batches
+
         self.accelerator = Accelerator(
-            dispatch_batches=self.args.dispatch_batches, split_batches=self.args.split_batches, deepspeed_plugin=self.args.deepspeed_plugin, gradient_accumulation_plugin=gradient_accumulation_plugin, kwargs_handlers=[accelerator_kwargs]
+            gradient_accumulation_plugin=gradient_accumulation_plugin, kwargs_handlers=[accelerator_kwargs], **accelerate_args
         )
         # some Trainer classes need to use `gather` instead of `gather_for_metrics`, thus we store a flag
         self.gather_function = self.accelerator.gather_for_metrics
@@ -634,7 +662,9 @@ class LLaVATrainer(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["worker_init_fn"] = functools.partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
             dataloader_params["prefetch_factor"] = self.args.dataloader_num_workers * 2 if self.args.dataloader_num_workers != 0 else None
 
         dataloader = self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
@@ -994,14 +1024,15 @@ class LLaVATrainer(Trainer):
         self.state.is_world_process_zero = self.is_world_process_zero()
 
         # tr_loss is a tensor to avoid synchronization of TPUs through .item()
-        tr_loss = torch.tensor(0.0).to(args.device)
         # _total_loss_scalar is updated everytime .item() has to be called on tr_loss and stores the sum of all losses
+        tr_loss = torch.tensor(0.0).to(args.device)
         self._total_loss_scalar = 0.0
         self._globalstep_last_logged = self.state.global_step
         model.zero_grad()
         grad_norm: Optional[float] = None
 
         self.control = self.callback_handler.on_train_begin(args, self.state, self.control)
+        start_time = time.time()
 
         # Skip the first epochs_trained epochs to get the random state of the dataloader at the right point.
         if not args.ignore_data_skip:
@@ -1048,6 +1079,12 @@ class LLaVATrainer(Trainer):
             step = -1
             for step, inputs in enumerate(epoch_iterator):
                 total_batched_samples += 1
+                
+                # Set current_gradient_accumulation_steps for transformers >= 4.46
+                if self.args.gradient_accumulation_steps > 1:
+                    self.current_gradient_accumulation_steps = self.args.gradient_accumulation_steps
+                else:
+                    self.current_gradient_accumulation_steps = 1
 
                 if self.args.include_num_input_tokens_seen:
                     main_input_name = getattr(self.model, "main_input_name", "input_ids")
@@ -1170,7 +1207,7 @@ class LLaVATrainer(Trainer):
                     self.state.epoch = epoch + (step + 1 + steps_skipped) / steps_in_epoch
                     self.control = self.callback_handler.on_step_end(args, self.state, self.control)
 
-                    self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval)
+                    self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=start_time)
                 else:
                     self.control = self.callback_handler.on_substep_end(args, self.state, self.control)
 
@@ -1191,7 +1228,7 @@ class LLaVATrainer(Trainer):
                 self.control.should_training_stop = True
 
             self.control = self.callback_handler.on_epoch_end(args, self.state, self.control)
-            self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval)
+            self._maybe_log_save_evaluate(tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=start_time)
 
             if DebugOption.TPU_METRICS_DEBUG in self.args.debug:
                 if is_torch_xla_available():
