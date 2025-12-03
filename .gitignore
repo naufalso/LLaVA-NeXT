@@ -27,6 +27,7 @@ checkpoints
 project_checkpoints
 debug_checkpoints
 playground/data
+playground/models
 playground/cc3m_llava34b_cap
 ckpts*
 

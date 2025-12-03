@@ -584,9 +584,7 @@ Answer the questions.""",
 )
 
 conv_apertus_instruct = Conversation(
-    system="You are Apertus, a helpful assistant created by the SwissAI initiative. "
-    "You are able to understand the visual content that the user provides, "
-    "and assist the user with a variety of tasks using natural language.",
+    system="You are Apertus, a helpful assistant created by the SwissAI initiative.",
     roles=("user", "assistant"),
     version="apertus",
     messages=[],
