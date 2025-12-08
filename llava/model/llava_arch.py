@@ -193,6 +193,9 @@ class LlavaMetaForCausalLM(ABC):
         image_features = self.get_model().get_vision_tower()(images)
         # image_features = self.get_model().vision_resampler(image_features, images=images)
         image_features = self.get_model().mm_projector(image_features)
+        # Ensure image features match model dtype
+        target_dtype = self.get_model().embed_tokens.weight.dtype
+        image_features = image_features.to(dtype=target_dtype)
         return image_features
     
     def encode_multimodals(self, videos_or_images, video_idx_in_batch, split_sizes=None):
@@ -217,6 +220,10 @@ class LlavaMetaForCausalLM(ABC):
             else:
                 all_videos_or_images_features.append(feat)
             all_faster_video_features.append(faster_video_feature)
+        # Ensure all features match model dtype
+        target_dtype = self.get_model().embed_tokens.weight.dtype
+        all_videos_or_images_features = [x.to(dtype=target_dtype) if isinstance(x, torch.Tensor) else x for x in all_videos_or_images_features]
+        all_faster_video_features = [x.to(dtype=target_dtype) if isinstance(x, torch.Tensor) and x is not 0 else x for x in all_faster_video_features]
         return all_videos_or_images_features,all_faster_video_features
 
     def add_token_per_grid(self, image_feature):
@@ -483,7 +490,8 @@ class LlavaMetaForCausalLM(ABC):
                     cur_new_input_embeds.append(cur_image_features)
                     cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
 
-            cur_new_input_embeds = [x.to(self.device) for x in cur_new_input_embeds]
+            target_dtype = self.get_model().embed_tokens.weight.dtype
+            cur_new_input_embeds = [x.to(device=self.device, dtype=target_dtype) for x in cur_new_input_embeds]
 
             # import pdb; pdb.set_trace()
             cur_new_input_embeds = torch.cat(cur_new_input_embeds)

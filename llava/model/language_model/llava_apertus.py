@@ -27,6 +27,23 @@ from transformers.generation.utils import GenerateOutput
 
 from llava.model.llava_arch import LlavaMetaModel, LlavaMetaForCausalLM
 
+# Patch xielu activation to preserve dtype
+try:
+    from transformers.models.apertus.modeling_apertus import ACT2FN
+    from transformers.activations import XIELUActivation
+    
+    if 'xielu' in ACT2FN:
+        class XIELUWrapper(XIELUActivation):
+            def forward(self, x):
+                out = super().forward(x)
+                if out.dtype != x.dtype:
+                    out = out.to(x.dtype)
+                return out
+        
+        ACT2FN['xielu'] = XIELUWrapper
+except ImportError:
+    pass
+
 
 class LlavaApertusConfig(ApertusConfig):
     model_type = "llava_apertus"
