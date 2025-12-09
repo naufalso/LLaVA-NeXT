@@ -86,7 +86,7 @@ def main(args):
         streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
         with torch.inference_mode():
-            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=0.2, max_new_tokens=1024, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
+            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
 
         outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
         conv.messages[-1][-1] = outputs
@@ -130,7 +130,7 @@ def main(args):
             streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
 
             with torch.inference_mode():
-                output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=0.2, max_new_tokens=1024, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
+                output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
 
             outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
             conv.messages[-1][-1] = outputs
@@ -150,7 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
-    parser.add_argument("--dtype", type=str, default="float16")
+    parser.add_argument("--dtype", type=str, default="float32")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode with a default query.")
     args = parser.parse_args()

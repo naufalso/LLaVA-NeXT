@@ -215,7 +215,7 @@ class LlavaMetaForCausalLM(ABC):
                 if self.config.add_faster_video:
                     cur_mm_spatial_pool_stride = cur_mm_spatial_pool_stride * 2
                     faster_video_feature = self.get_2dPool(feat,cur_mm_spatial_pool_stride)
-            if slower_img_feat is not 0:
+            if slower_img_feat != 0:
                 all_videos_or_images_features.append(slower_img_feat)
             else:
                 all_videos_or_images_features.append(feat)
@@ -223,7 +223,7 @@ class LlavaMetaForCausalLM(ABC):
         # Ensure all features match model dtype
         target_dtype = self.get_model().embed_tokens.weight.dtype
         all_videos_or_images_features = [x.to(dtype=target_dtype) if isinstance(x, torch.Tensor) else x for x in all_videos_or_images_features]
-        all_faster_video_features = [x.to(dtype=target_dtype) if isinstance(x, torch.Tensor) and x is not 0 else x for x in all_faster_video_features]
+        all_faster_video_features = [x.to(dtype=target_dtype) if isinstance(x, torch.Tensor) and x != 0 else x for x in all_faster_video_features]
         return all_videos_or_images_features,all_faster_video_features
 
     def add_token_per_grid(self, image_feature):
@@ -371,12 +371,48 @@ class LlavaMetaForCausalLM(ABC):
                                 vision_tower_image_size = self.get_vision_tower().image_size
                             else:
                                 raise ValueError("vision_tower_image_size is not found in the vision tower.")
-                            try:
-                                num_patch_width, num_patch_height = get_anyres_image_grid_shape(image_sizes[image_idx], self.config.image_grid_pinpoints, vision_tower_image_size)
-                            except Exception as e:
-                                rank0_print(f"Error: {e}")
-                                num_patch_width, num_patch_height = 2, 2
-                            image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, -1)
+                            
+                            num_patch_width, num_patch_height = 2, 2 # Default fallback
+                            grid_shape_found = False
+
+                            if image_sizes is not None:
+                                try:
+                                    # rank0_print(f"DEBUG: image_sizes: {image_sizes}. Trying to get grid shape for image index {image_idx}")
+                                    num_patch_width, num_patch_height = get_anyres_image_grid_shape(image_sizes[image_idx], self.config.image_grid_pinpoints, vision_tower_image_size)
+                                    # rank0_print(f"DEBUG: Inferred grid shape: {num_patch_width} x {num_patch_height}")
+                                    grid_shape_found = True
+                                except Exception as e:
+                                    rank0_print(f"Error getting grid shape: {e}")
+                            
+                            if grid_shape_found:
+                                if num_patch_width * num_patch_height != image_feature.shape[0]:
+                                    # rank0_print(f"DEBUG: Inferred grid shape {num_patch_width}x{num_patch_height} ({num_patch_width*num_patch_height} patches) does not match actual patches {image_feature.shape[0]}. Falling back to inference.")
+                                    grid_shape_found = False
+                            
+                            if not grid_shape_found:
+                                # Attempt to infer grid shape from the number of patches
+                                num_grid_patches = image_feature.shape[0]
+                                if num_grid_patches == 4:
+                                    num_patch_width, num_patch_height = 2, 2
+                                elif num_grid_patches == 2:
+                                    num_patch_width, num_patch_height = 1, 2
+                                elif num_grid_patches == 3:
+                                    num_patch_width, num_patch_height = 1, 3
+                                elif num_grid_patches == 6:
+                                    num_patch_width, num_patch_height = 2, 3
+                                else:
+                                    if num_grid_patches == 1:
+                                        num_patch_width, num_patch_height = 1, 1
+                                    else:
+                                        num_patch_width, num_patch_height = 2, 2
+                            
+                            # rank0_print(f"DEBUG: image_feature shape before view: {image_feature.shape}")
+                            # rank0_print(f"DEBUG: num_patch_height: {num_patch_height}, num_patch_width: {num_patch_width}")
+                            # rank0_print(f"DEBUG: height: {height}, width: {width}")
+                            # rank0_print(f"DEBUG: base_image_feature shape: {base_image_feature.shape}")
+
+                            image_feature = image_feature.view(num_patch_height, num_patch_width, height, width, base_image_feature.shape[-1])
+                            # rank0_print(f"DEBUG: image_feature shape after view: {image_feature.shape}")
                         else:
                             image_feature = image_feature.view(2, 2, height, width, -1)
 
@@ -401,7 +437,10 @@ class LlavaMetaForCausalLM(ABC):
                             image_feature = image_feature.permute(4, 0, 2, 1, 3).contiguous()
                             image_feature = image_feature.flatten(1, 2).flatten(2, 3)
                             image_feature = unpad_image(image_feature, image_sizes[image_idx])
-                            image_feature = torch.cat((image_feature, self.model.image_newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
+                            # newline = self.model.image_newline
+                            # if image_feature.shape[0] != newline.shape[0]:
+                            #     newline = newline.repeat(image_feature.shape[0] // newline.shape[0])
+                            # image_feature = torch.cat((image_feature, newline[:, None, None].expand(*image_feature.shape[:-1], 1).to(image_feature.device)), dim=-1)
                             image_feature = image_feature.flatten(1, 2).transpose(0, 1)
                         else:
                             image_feature = image_feature.permute(0, 2, 1, 3, 4).contiguous()
