@@ -191,6 +191,8 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 or "llava-v1.6-34b" in model_name.lower()
                 or "llava-v1.5" in model_name.lower()
             ):
+
+                rank0_print(f"[DEBUG] Loading Tokenizer from: {model_path}")
                 from llava.model.language_model.llava_llama import LlavaConfig
 
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
@@ -320,5 +322,10 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         context_len = model.config.tokenizer_model_max_length
     else:
         context_len = 2048
+
+    rank0_print(f"Tokenizer: {tokenizer.__class__.__name__ if tokenizer is not None else 'None'}")
+    rank0_print(f"Model: {model.__class__.__name__ if model is not None else 'None'}")
+    rank0_print(f"Image Processor: {image_processor.__class__.__name__ if image_processor is not None else 'None'}")
+    rank0_print(f"Context length: {context_len}")
 
     return tokenizer, model, image_processor, context_len
