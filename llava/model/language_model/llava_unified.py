@@ -214,7 +214,9 @@ def create_llava_model_class(model_type, config_class):
         # MPT needs special handling for hidden_size
         if registry_entry.get("needs_hidden_size_init"):
             config.hidden_size = config.d_model
-        super(model_class, self).__init__(config)
+        # Call the base model's __init__ via the mixin chain
+        # We can't use model_class here as it's not defined yet, so we rely on MRO
+        base_model_class.__init__(self, config)
     
     # Create attributes dict
     attrs = {
@@ -353,7 +355,8 @@ def create_llava_causal_lm_class(model_type, config_class, model_class):
         else:
             # Standard forward pass - MPT has different signature
             if registry_entry.get("mpt_prepare_signature"):
-                return super(causal_lm_class, self).forward(
+                return base_causal_lm_class.forward(
+                    self,
                     input_ids,
                     past_key_values=past_key_values,
                     attention_mask=attention_mask,
@@ -365,7 +368,8 @@ def create_llava_causal_lm_class(model_type, config_class, model_class):
                     return_dict=return_dict,
                 )
             else:
-                return super(causal_lm_class, self).forward(
+                return base_causal_lm_class.forward(
+                    self,
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     position_ids=position_ids,
@@ -419,7 +423,8 @@ def create_llava_causal_lm_class(model_type, config_class, model_class):
         else:
             inputs_embeds = self.get_model().embed_tokens(inputs)
         
-        return super(causal_lm_class, self).generate(
+        return base_causal_lm_class.generate(
+            self,
             position_ids=position_ids, 
             attention_mask=attention_mask, 
             inputs_embeds=inputs_embeds, 
@@ -429,8 +434,8 @@ def create_llava_causal_lm_class(model_type, config_class, model_class):
     def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
         images = kwargs.pop("images", None)
         image_sizes = kwargs.pop("image_sizes", None)
-        inputs = super(causal_lm_class, self).prepare_inputs_for_generation(
-            input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
+        inputs = base_causal_lm_class.prepare_inputs_for_generation(
+            self, input_ids, past_key_values=past_key_values, inputs_embeds=inputs_embeds, **kwargs
         )
         if images is not None:
             inputs["images"] = images
@@ -452,10 +457,14 @@ def create_llava_causal_lm_class(model_type, config_class, model_class):
     if model_type == "llava_mpt":
         attrs["supports_gradient_checkpointing"] = True
         
-        def _set_gradient_checkpointing(self, module, value=False):
-            if isinstance(module, model_class):
-                module.gradient_checkpointing = value
-        attrs["_set_gradient_checkpointing"] = _set_gradient_checkpointing
+        # Capture model_class in closure
+        def _make_set_gradient_checkpointing(captured_model_class):
+            def _set_gradient_checkpointing(self, module, value=False):
+                if isinstance(module, captured_model_class):
+                    module.gradient_checkpointing = value
+            return _set_gradient_checkpointing
+        
+        attrs["_set_gradient_checkpointing"] = _make_set_gradient_checkpointing(model_class)
     
     # Create the CausalLM class
     causal_lm_class = type(class_name, (base_causal_lm_class, LlavaMetaForCausalLM), attrs)
