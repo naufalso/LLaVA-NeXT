@@ -1,16 +1,58 @@
 import os
 
-AVAILABLE_MODELS = {
-    "llava_llama": "LlavaLlamaForCausalLM, LlavaConfig",
-    "llava_qwen": "LlavaQwenForCausalLM, LlavaQwenConfig",
-    "llava_mistral": "LlavaMistralForCausalLM, LlavaMistralConfig",
-    "llava_mixtral": "LlavaMixtralForCausalLM, LlavaMixtralConfig",
-    # "llava_qwen_moe": "LlavaQwenMoeForCausalLM, LlavaQwenMoeConfig",    
-    # Add other models as needed
-}
+# Import all model classes from the unified implementation
+# This provides backward compatibility with existing code
+from .language_model.llava_unified import (
+    # LLaMA
+    LlavaConfig,
+    LlavaLlamaModel,
+    LlavaLlamaForCausalLM,
+    # Mistral
+    LlavaMistralConfig,
+    LlavaMistralModel,
+    LlavaMistralForCausalLM,
+    # Mixtral
+    LlavaMixtralConfig,
+    LlavaMixtralModel,
+    LlavaMixtralForCausalLM,
+    # Gemma
+    LlavaGemmaConfig,
+    LlavaGemmaModel,
+    LlavaGemmaForCausalLM,
+    # Qwen
+    LlavaQwenConfig,
+    LlavaQwenModel,
+    LlavaQwenForCausalLM,
+    # Qwen MoE
+    LlavaQwenMoeConfig,
+    LlavaQwenMoeModel,
+    LlavaQwenMoeForCausalLM,
+    # MPT
+    LlavaMptConfig,
+    LlavaMptModel,
+    LlavaMptForCausalLM,
+)
 
-for model_name, model_classes in AVAILABLE_MODELS.items():
-    try:
-        exec(f"from .language_model.{model_name} import {model_classes}")
-    except Exception as e:
-        print(f"Failed to import {model_name} from llava.language_model.{model_name}. Error: {e}")
+__all__ = [
+    "LlavaConfig",
+    "LlavaLlamaModel",
+    "LlavaLlamaForCausalLM",
+    "LlavaMistralConfig",
+    "LlavaMistralModel",
+    "LlavaMistralForCausalLM",
+    "LlavaMixtralConfig",
+    "LlavaMixtralModel",
+    "LlavaMixtralForCausalLM",
+    "LlavaGemmaConfig",
+    "LlavaGemmaModel",
+    "LlavaGemmaForCausalLM",
+    "LlavaQwenConfig",
+    "LlavaQwenModel",
+    "LlavaQwenForCausalLM",
+    "LlavaQwenMoeConfig",
+    "LlavaQwenMoeModel",
+    "LlavaQwenMoeForCausalLM",
+    "LlavaMptConfig",
+    "LlavaMptModel",
+    "LlavaMptForCausalLM",
+]
