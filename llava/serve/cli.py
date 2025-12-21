@@ -34,7 +34,7 @@ def main(args):
     if "llama-2" in model_name.lower():
         conv_mode = "llava_llama_2"
     elif "apertus" in model_name.lower():
-        conv_mode = "apertus_instruct"
+        conv_mode = "apertus_ori"
     elif "v1" in model_name.lower():
         conv_mode = "llava_v1"
     elif "mpt" in model_name.lower():
@@ -83,12 +83,22 @@ def main(args):
             stop_str = conv.stop_str
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
-        streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        # streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+        print(f"Input IDs shape: {input_ids.shape}")
+        print(f"Image Tensor shape: {image_tensor.shape}")
 
         with torch.inference_mode():
-            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
+            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, use_cache=True, stopping_criteria=[stopping_criteria])
 
-        outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
+        print(f"Output IDs shape: {output_ids.shape}")
+        print(f"Full decoded output: {tokenizer.decode(output_ids[0])}")
+        if torch.equal(output_ids[0, :input_ids.shape[1]], input_ids[0]):
+            print("The generated IDs contain the prompt IDs as prefix.")
+            outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
+        else:
+            print("The generated IDs do NOT contain the prompt IDs as prefix.")
+            outputs = tokenizer.decode(output_ids[0]).strip()
         conv.messages[-1][-1] = outputs
 
         print(f"{roles[1]}: {outputs}")

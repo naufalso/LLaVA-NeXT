@@ -416,7 +416,8 @@ conv_llava_llama_2 = Conversation(
 def safe_load_tokenizer(tokenizer_id):
     try:
         return AutoTokenizer.from_pretrained(tokenizer_id)
-    except Exception:
+    except Exception as e:
+        print(f"Error loading tokenizer {tokenizer_id}: {e}")
         return None
 
 conv_llava_llama_3 = Conversation(
@@ -611,7 +612,7 @@ conv_apertus_instruct = Conversation(
 )
 
 conv_apertus_ori = Conversation(
-    system="You are Apertus, a helpful assistant created by the SwissAI initiative.",
+    system="You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.", #"You are Apertus, a helpful assistant created by the SwissAI initiative.",
     roles=("user", "assistant"),
     version="apertus_ori",
     messages=[],
