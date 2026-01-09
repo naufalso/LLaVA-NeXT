@@ -164,7 +164,7 @@ def main(args):
         answer = postprocess_fn(raw_output)
         answer = remove_eot_token(answer).replace(stop_str, "").strip()
         
-        pred_entry = {"question_id": question_id, "answer": answer}
+        pred_entry = {"question_id": question_id, "question": question, "answer": answer}
         if ground_truth:
             pred_entry["ground_truth"] = ground_truth
         predictions.append(pred_entry)
