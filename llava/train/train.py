@@ -599,60 +599,114 @@ def preprocess_apertus_ori(
     assistant_end_id = tokenizer.convert_tokens_to_ids("<|assistant_end|>")
     eot_id = assistant_end_id
 
-    unmask_tokens = ["<|system_start|>", "<|system_end|>", "<|user_start|>", "<|user_end|>", "<|assistant_start|>", "<|assistant_end|>", "\n\n"]
-    unmask_tokens_idx = [tokenizer.convert_tokens_to_ids(tok) for tok in unmask_tokens]
+    # unmask_tokens = ["<|system_start|>", "<|system_end|>", "<|user_start|>", "<|user_end|>", "<|assistant_start|>", "<|assistant_end|>", "\n\n"]
+    # unmask_tokens_idx = [tokenizer.convert_tokens_to_ids(tok) for tok in unmask_tokens]
 
     nl_tokens = tokenizer.convert_tokens_to_ids("\n\n")
+
+
     # Apply prompt templates
     input_ids, targets = [], []
     for i, source in enumerate(sources):
+        # Skip the first one if it is not from human
         if roles[source[0]["from"]] != roles["human"]:
             source = source[1:]
 
-        input_id, target = [], []
+        conversations = []
 
-        # New version, use apply chat template
-        # Build system message for each sentence
-        input_id += tokenizer.apply_chat_template([{"role" : "system", "content" : system_message}])
-        target += [IGNORE_INDEX] * len(input_id)
+        # Append system message
+        conversations.append({"role": "system", "content": system_message})
 
+        # Build conversations
         for conv in source:
             # Make sure llava data can load
             try:
                 role = conv["role"]
                 content = conv["content"]
-            except:
+            except Exception:
                 role = conv["from"]
                 content = conv["value"]
 
-            role =  roles.get(role, role)
+            role = roles.get(role, role)
+            conversations.append({"role": role, "content": content})
 
-            conv = [{"role" : role, "content" : content}]
+        # Tokenize conversations using the chat template
+        token_ids = tokenizer.apply_chat_template(conversations)
 
-            # First is bos token we don't need here
-            encode_id = tokenizer.apply_chat_template(conv)[1:]
-            input_id += encode_id
-            if role in ["user", "system"]:
-                target += [IGNORE_INDEX] * len(encode_id)
+        # Start by masking everything, then unmask assistant spans only
+        target_ids = [IGNORE_INDEX] * len(token_ids)
+
+        cur_idx = 0
+        while cur_idx < len(token_ids):
+            if token_ids[cur_idx] == assistant_start_id:
+                # Unmask the assistant span including boundary tokens
+                target_ids[cur_idx] = token_ids[cur_idx]
+                cur_idx += 1
+                while cur_idx < len(token_ids) and token_ids[cur_idx] != assistant_end_id:
+                    target_ids[cur_idx] = token_ids[cur_idx]
+                    cur_idx += 1
+                if cur_idx < len(token_ids):
+                    target_ids[cur_idx] = token_ids[cur_idx]  # include </assistant>
+                    cur_idx += 1
             else:
-                target += encode_id
+                cur_idx += 1
 
-        assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
-        for idx, encode_id in enumerate(input_id):
-            if encode_id in unmask_tokens_idx:
-                target[idx] = encode_id
-            if encode_id == image_token_index:
-                input_id[idx] = IMAGE_TOKEN_INDEX
-        input_ids.append(input_id)
-        targets.append(target)
+        # Replace image token placeholders in the model inputs
+        token_ids = [IMAGE_TOKEN_INDEX if tok == image_token_index else tok for tok in token_ids]
 
-    input_ids = torch.tensor(input_ids, dtype=torch.long)
-    targets = torch.tensor(targets, dtype=torch.long)
+        input_ids.append(token_ids)
+        targets.append(target_ids)
 
-    return dict(
-        input_ids=input_ids,  # tensor(bs x seq_len)
-        labels=targets,  # tensor(bs x seq_len)
-    )
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        targets = torch.tensor(targets, dtype=torch.long)
+
+        return dict(
+            input_ids=input_ids,  # tensor(bs x seq_len)
+            labels=targets,  # tensor(bs x seq_len)
+        )
+
+        # # New version, use apply chat template
+        # # Build system message for each sentence
+        # input_id += tokenizer.apply_chat_template([{"role" : "system", "content" : system_message}])
+        # target += [IGNORE_INDEX] * len(input_id)
+
+        # for conv in source:
+        #     # Make sure llava data can load
+        #     try:
+        #         role = conv["role"]
+        #         content = conv["content"]
+        #     except:
+        #         role = conv["from"]
+        #         content = conv["value"]
+
+        #     role =  roles.get(role, role)
+
+        #     conv = [{"role" : role, "content" : content}]
+
+        #     # First is bos token we don't need here
+        #     encode_id = tokenizer.apply_chat_template(conv)[1:]
+        #     input_id += encode_id
+        #     if role in ["user", "system"]:
+        #         target += [IGNORE_INDEX] * len(encode_id)
+        #     else:
+        #         target += encode_id
+
+        # assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
+        # for idx, encode_id in enumerate(input_id):
+        #     # if encode_id in unmask_tokens_idx:
+        #     #     target[idx] = encode_id
+        #     if encode_id == image_token_index:
+        #         input_id[idx] = IMAGE_TOKEN_INDEX
+        # input_ids.append(input_id)
+        # targets.append(target)
+
+    # input_ids = torch.tensor(token_ids, dtype=torch.long)
+    # targets = torch.tensor(target_ids, dtype=torch.long)
+
+    # return dict(
+    #     input_ids=input_ids,  # tensor(bs x seq_len)
+    #     labels=targets,  # tensor(bs x seq_len)
+    # )
 
 
 def preprocess_gemma(sources: List[List[Dict[str, str]]], tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
@@ -894,7 +948,11 @@ def preprocess_llama3(
     )
 
 
-def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
+def preprocess_v1(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False
+) -> Dict:
     conv = conversation_lib.default_conversation.copy()
     roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
 
@@ -913,9 +971,8 @@ def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_imag
         conversations.append(conv.get_prompt())
 
     # Tokenize conversations
-
     if has_image:
-        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors="pt") for prompt in conversations], dim=0)
+        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
     else:
         input_ids = tokenizer(
             conversations,
@@ -953,7 +1010,7 @@ def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_imag
                 round_len = len(tokenizer(rou).input_ids)
                 instruction_len = len(tokenizer(parts[0]).input_ids) - 2
 
-            if i != 0 and getattr(tokenizer, "legacy", False) and IS_TOKENIZER_GREATER_THAN_0_14:
+            if i != 0 and not tokenizer.legacy and IS_TOKENIZER_GREATER_THAN_0_14:
                 round_len -= 1
                 instruction_len -= 1
 
@@ -965,7 +1022,10 @@ def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_imag
         if cur_len < tokenizer.model_max_length:
             if cur_len != total_len:
                 target[:] = IGNORE_INDEX
-                print(f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}." f" (ignored)")
+                print(
+                    f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}."
+                    f" (ignored)"
+                )
 
     return dict(
         input_ids=input_ids,
@@ -1427,6 +1487,9 @@ class DataCollatorForSupervisedDataset(object):
     tokenizer: transformers.PreTrainedTokenizer
     printed_samples: int = 0
     max_print_samples: int = 2  # Number of batches to print
+    zero_train_token_samples: int = 0  # Cumulative counter of dropped samples
+    total_samples_seen: int = 0  # Cumulative counter of seen samples
+    max_zero_logs: int = 5  # Avoid spamming the log
 
     def pad_sequence(self, input_ids, batch_first, padding_value):
         if self.tokenizer.padding_side == "left":
@@ -1441,6 +1504,32 @@ class DataCollatorForSupervisedDataset(object):
         # input_ids, labels, ids = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels", "id"))
         input_ids = [_input_ids[: self.tokenizer.model_max_length] for _input_ids in input_ids]
         labels = [_labels[: self.tokenizer.model_max_length] for _labels in labels]
+
+        # Guard against batches where every token is ignored (would yield NaN loss)
+        train_token_counts = [int((_lbl != IGNORE_INDEX).sum().item()) for _lbl in labels]
+        self.total_samples_seen += len(train_token_counts)
+        zero_indices = [idx for idx, cnt in enumerate(train_token_counts) if cnt == 0]
+
+        if zero_indices:
+            self.zero_train_token_samples += len(zero_indices)
+            # Log a few times to confirm the root cause
+            if self.zero_train_token_samples <= self.max_zero_logs:
+                sample_ids = [instances[idx].get("id", "?") for idx in zero_indices]
+                rank0_print(
+                    f"[DataCollator] Dropping {len(zero_indices)} samples with zero trainable tokens "
+                    f"(cumulative dropped: {self.zero_train_token_samples}/{self.total_samples_seen}). "
+                    f"Sample ids: {sample_ids}"
+                )
+
+            keep_indices = [idx for idx, cnt in enumerate(train_token_counts) if cnt > 0]
+            if not keep_indices:
+                raise ValueError("All samples in the batch have zero trainable tokens; check prompts/truncation.")
+
+            # Filter out zero-token samples before padding
+            input_ids = [input_ids[idx] for idx in keep_indices]
+            labels = [labels[idx] for idx in keep_indices]
+            # Note: instances is only used for logging above; batch size can shrink here.
+
         if self.tokenizer.pad_token_id is None:
             # self.tokenizer.pad_token_id = self.tokenizer.eos_token_id  # FIXME: this could only be triggered for llama3 model.
             self.tokenizer.pad_token_id = 0 # This gets the best result. Don't know why.
@@ -1506,11 +1595,18 @@ class DataCollatorForSupervisedDataset(object):
                 try:
                     # Handle negative IMAGE_TOKEN_INDEX for decoding
                     input_ids_list = input_ids.tolist()
-                    # Replace IMAGE_TOKEN_INDEX with a placeholder or pad token
-                    decoded_input_ids = [
-                        tid if tid >= 0 else (self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0) 
-                        for tid in input_ids_list
-                    ]
+                    image_placeholder_id = self.tokenizer.convert_tokens_to_ids("<image>")
+                    fallback_pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+                    # Replace IMAGE_TOKEN_INDEX with the real <image> token when available for readable visualization
+                    decoded_input_ids = []
+                    for tid in input_ids_list:
+                        if tid >= 0:
+                            decoded_input_ids.append(tid)
+                        else:
+                            if image_placeholder_id is not None and image_placeholder_id != self.tokenizer.unk_token_id:
+                                decoded_input_ids.append(image_placeholder_id)
+                            else:
+                                decoded_input_ids.append(fallback_pad_id)
                     input_text = self.tokenizer.decode(decoded_input_ids, skip_special_tokens=False)
                     rank0_print(input_text if input_text else "[EMPTY OR DECODE FAILED]")
                 except Exception as e:
@@ -1529,35 +1625,73 @@ class DataCollatorForSupervisedDataset(object):
                     rank0_print(f"[ERROR decoding target: {e}]")
                 sys.stdout.flush()
                 
-                # Show which tokens are being trained on
-                rank0_print("\n--- TOKEN-LEVEL BREAKDOWN (first 50 tokens) ---")
-                max_tokens_display = min(50, len(input_ids))
-                for i in range(max_tokens_display):
+                # Show first 50 ignored and first 50 train tokens
+                rank0_print("\n--- TOKEN-LEVEL BREAKDOWN ---")
+                ignored_entries = []
+                train_entries = []
+                max_each = 50
+
+                for i in range(len(input_ids)):
+                    if len(ignored_entries) >= max_each and len(train_entries) >= max_each:
+                        break
+                    token_id = None
+                    label_id = None
                     try:
                         token_id = input_ids[i].item()
                         label_id = labels[i].item()
-                        
+
                         if token_id < 0:
-                            token_str = f"<SPECIAL_TOKEN_{token_id}>"
+                            if token_id == IMAGE_TOKEN_INDEX:
+                                token_str = "<image>"
+                            elif token_id == IGNORE_INDEX:
+                                token_str = "<ignore>"
+                            else:
+                                token_str = f"<SPECIAL_TOKEN_{token_id}>"
                         else:
                             token_str = self.tokenizer.decode([token_id])
-                        
+
                         if label_id == IGNORE_INDEX:
-                            status = "[IGNORED]"
                             label_str = "N/A"
+                            status = "[IGNORED]"
+                            if len(ignored_entries) < max_each:
+                                ignored_entries.append(
+                                    f"  Pos {i:3d}: {status:10s} Input: {repr(token_str):20s} (ID: {token_id:6d}) | Label: {label_str:20s} (ID: {label_id:6d})"
+                                )
                         else:
-                            status = "[TRAIN]"
                             if label_id < 0:
                                 label_str = f"<SPECIAL_TOKEN_{label_id}>"
                             else:
                                 label_str = self.tokenizer.decode([label_id])
-                        
-                        rank0_print(f"  Pos {i:3d}: {status:10s} Input: {repr(token_str):20s} (ID: {token_id:6d}) | Label: {repr(label_str):20s} (ID: {label_id:6d})")
+                            status = "[TRAIN]"
+                            if len(train_entries) < max_each:
+                                train_entries.append(
+                                    f"  Pos {i:3d}: {status:10s} Input: {repr(token_str):20s} (ID: {token_id:6d}) | Label: {repr(label_str):20s} (ID: {label_id:6d})"
+                                )
                     except Exception as e:
-                        rank0_print(f"  Pos {i:3d}: [ERROR: {e}]")
-                
-                if len(input_ids) > max_tokens_display:
-                    rank0_print(f"  ... ({len(input_ids) - max_tokens_display} more tokens)")
+                        err_entry = f"  Pos {i:3d}: [ERROR: {e}]"
+                        if label_id == IGNORE_INDEX and len(ignored_entries) < max_each:
+                            ignored_entries.append(err_entry)
+                        elif label_id is None:
+                            # If label_id could not be read, log under ignored bucket first
+                            if len(ignored_entries) < max_each:
+                                ignored_entries.append(err_entry)
+                        elif len(train_entries) < max_each:
+                            train_entries.append(err_entry)
+
+                rank0_print("  First 50 [IGNORED] tokens:")
+                if ignored_entries:
+                    for entry in ignored_entries:
+                        rank0_print(entry)
+                else:
+                    rank0_print("    None found")
+
+                rank0_print("  First 50 [TRAIN] tokens:")
+                if train_entries:
+                    for entry in train_entries:
+                        rank0_print(entry)
+                else:
+                    rank0_print("    None found")
+
                 sys.stdout.flush()
                 
                 # Statistics

@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import time
 from typing import Tuple
 
 import torch
@@ -58,6 +59,7 @@ def resolve_split_json(args) -> str:
 
 def main(args):
     disable_torch_init()
+    start_time = time.time()
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, _ = load_pretrained_model(
@@ -91,6 +93,8 @@ def main(args):
         conv_mode = args.conv_mode
     elif args.conv_mode is not None:
         conv_mode = args.conv_mode
+
+    print(f"Using conversation mode: {conv_mode}")
 
     conv = conv_templates[conv_mode].copy()
     roles = ("user", "assistant") if "mpt" in model_name.lower() else conv.roles
@@ -174,7 +178,12 @@ def main(args):
     metrics = {key: value * 100.0 for key, value in metrics.items()}
     cider = metrics.get("CIDEr", 0.0)
     metrics["CIDEr"] = cider
+    
+    elapsed_time = time.time() - start_time
+    metrics["runtime_seconds"] = elapsed_time
+    
     print(f"CIDEr: {cider:.2f}")
+    print(f"Runtime: {elapsed_time:.2f} seconds")
     print(f"Saved predictions to {output_path}")
 
     metrics_output_path = output_path.replace(".json", "_metrics.json")

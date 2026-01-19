@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import time
 from typing import Tuple
 
 import torch
@@ -34,6 +35,8 @@ def remove_eot_token(text: str) -> str:
     # Handle tokens without spaces: <|assistant_end|>, <|eot_id|>, <|im_end|>
     text = re.sub(r"<\|[a-z_]*end[a-z_]*\|>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"<\|[a-z_]*id\|>", "", text, flags=re.IGNORECASE)
+    # Handle </s> and < /s > tokens
+    text = re.sub(r"<\s*/\s*s\s*>", "", text, flags=re.IGNORECASE)
     return text.strip()
 
 
@@ -64,6 +67,7 @@ def select_postprocess_fn(dataset: str):
 
 def main(args):
     disable_torch_init()
+    start_time = time.time()
 
     model_name = get_model_name_from_path(args.model_path)
     tokenizer, model, image_processor, _ = load_pretrained_model(
@@ -139,6 +143,9 @@ def main(args):
             full_prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt"
         ).unsqueeze(0).cuda()
 
+        # Create attention mask
+        attention_mask = torch.ones_like(input_ids)
+
         stop_str = new_conv.sep if new_conv.sep_style != SeparatorStyle.TWO else new_conv.sep2
         if hasattr(new_conv, "stop_str") and new_conv.stop_str:
             stop_str = new_conv.stop_str
@@ -148,6 +155,8 @@ def main(args):
         with torch.inference_mode():
             output_ids = model.generate(
                 input_ids,
+                attention_mask=attention_mask,
+                pad_token_id=tokenizer.pad_token_id,
                 images=image_tensor,
                 do_sample=args.temperature > 0.0,
                 temperature=args.temperature,
@@ -166,7 +175,7 @@ def main(args):
         
         pred_entry = {"question_id": question_id, "question": question, "answer": answer}
         if ground_truth:
-            pred_entry["ground_truth"] = ground_truth
+            pred_entry["ground_truth"] = list(set(ground_truth)) # remove duplicates
         predictions.append(pred_entry)
 
         if args.debug:
@@ -189,12 +198,16 @@ def main(args):
         question_json_path=questions_json,
         annotation_json_path=annotations_json,
     )
+    
+    elapsed_time = time.time() - start_time
+    
     print(f"Accuracy: {accuracy:.2f}")
+    print(f"Runtime: {elapsed_time:.2f} seconds")
     print(f"Saved predictions to {output_path}")
 
     metrics_output_path = output_path.replace(".json", "_metrics.json")
     with open(metrics_output_path, "w") as f:
-        json.dump({"accuracy": accuracy}, f, indent=2)
+        json.dump({"accuracy": accuracy, "runtime_seconds": elapsed_time}, f, indent=2)
     print(f"Saved metrics to {metrics_output_path}")
 
 
