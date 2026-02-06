@@ -22,6 +22,7 @@ from llava.mm_utils import (
     tokenizer_image_token,
 )
 from llava.utils import disable_torch_init
+from llava.eval.sample_indicies import SAMPLE_INDICES
 from open_flamingo.eval.eval_datasets import VQADataset
 from open_flamingo.eval.ok_vqa_utils import postprocess_ok_vqa_generation
 from open_flamingo.eval.vqa_metric import compute_vqa_accuracy, postprocess_vqa_generation
@@ -40,11 +41,23 @@ def remove_eot_token(text: str) -> str:
     return text.strip()
 
 
-def build_prompt(instruction: str, question: str, model) -> str:
-    base_prompt = f"{instruction}\nQuestion: {question}\nAnswer:"
+def build_prompt(question: str, model, dataset: str, instruction: str = None) -> str:
+    if instruction:
+        prompt_suffix = f"\n{instruction}"
+    elif dataset == "vizwiz":
+        prompt_suffix = (
+            "\nWhen the provided information is insufficient, respond with 'Unanswerable'."
+            "\nAnswer the question using a single word or phrase."
+        )
+    elif dataset in {"textvqa", "ok_vqa", "vqav2"}:
+        prompt_suffix = "\nAnswer the question using a single word or phrase."
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+
+    qs = f"{question}{prompt_suffix}"
     if getattr(model.config, "mm_use_im_start_end", False):
-        return f"{DEFAULT_IM_START_TOKEN}{DEFAULT_IMAGE_TOKEN}{DEFAULT_IM_END_TOKEN}\n{base_prompt}"
-    return f"{DEFAULT_IMAGE_TOKEN}\n{base_prompt}"
+        return f"{DEFAULT_IM_START_TOKEN}{DEFAULT_IMAGE_TOKEN}{DEFAULT_IM_END_TOKEN}\n{qs}"
+    return f"{DEFAULT_IMAGE_TOKEN}\n{qs}"
 
 
 def resolve_paths(args) -> Tuple[str, str, str]:
@@ -116,11 +129,22 @@ def main(args):
         dataset_name=args.dataset,
     )
 
+    if args.sample_eval:
+        args.sample_size = 500
+
+    if args.sample_eval:
+        dataset_key = "okvqa" if args.dataset == "ok_vqa" else args.dataset
+        indices = SAMPLE_INDICES[dataset_key][: args.sample_size]
+    elif args.sample_size is not None:
+        indices = list(range(min(args.sample_size, len(dataset))))
+    else:
+        indices = list(range(len(dataset)))
+
     predictions = []
 
-    for idx in range(len(dataset)):
-        if args.sample_size is not None and idx >= args.sample_size:
-            break
+    for idx in indices:
+        if idx >= len(dataset):
+            continue
 
         sample = dataset[idx]
         image: Image.Image = sample["image"].convert("RGB")
@@ -132,7 +156,7 @@ def main(args):
         image_tensor = image_processor.preprocess(image, return_tensors="pt")["pixel_values"].cuda()
         image_tensor = image_tensor.to(dtype=model.dtype)
 
-        prompt = build_prompt(args.prompt, question, model)
+        prompt = build_prompt(question, model, args.dataset, instruction=args.prompt)
 
         new_conv = conv.copy()
         new_conv.append_message(roles[0], prompt)
@@ -224,7 +248,8 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", type=str, default="float32")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--sample-size", type=int, default=None)
-    parser.add_argument("--prompt", type=str, default="Answer the question using a single word or phrase.")
+    parser.add_argument("--sample-eval", action="store_true", help="Use predefined 500-sample indices.")
+    parser.add_argument("--prompt", type=str, default=None, help="Override default dataset prompt suffix.")
 
     # VQAv2 paths
     parser.add_argument("--vqav2-image-dir", type=str, help="Path to VQAv2 image directory (val2014/test2015).")

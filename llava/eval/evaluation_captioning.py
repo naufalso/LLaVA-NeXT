@@ -22,6 +22,7 @@ from llava.mm_utils import (
     tokenizer_image_token,
 )
 from llava.utils import disable_torch_init
+from llava.eval.sample_indicies import SAMPLE_INDICES
 from open_flamingo.eval.coco_metric import compute_cider, postprocess_captioning_generation
 from open_flamingo.eval.eval_datasets import CaptionDataset
 
@@ -110,11 +111,21 @@ def main(args):
         dataset_name=args.dataset,
     )
 
+    if args.sample_eval:
+        args.sample_size = 500
+
+    if args.sample_eval:
+        indices = SAMPLE_INDICES[args.dataset][: args.sample_size]
+    elif args.sample_size is not None:
+        indices = list(range(min(args.sample_size, len(dataset))))
+    else:
+        indices = list(range(len(dataset)))
+
     predictions = []
 
-    for idx in range(len(dataset)):
-        if args.sample_size is not None and idx >= args.sample_size:
-            break
+    for idx in indices:
+        if idx >= len(dataset):
+            continue
 
         sample = dataset[idx]
         image: Image.Image = sample["image"].convert("RGB")
@@ -205,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", type=str, default="float32")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--sample-size", type=int, default=None)
+    parser.add_argument("--sample-eval", action="store_true", help="Use predefined 500-sample indices.")
     parser.add_argument("--prompt", type=str, default="Provide a short caption for this image.")
     # COCO paths
     parser.add_argument("--coco-train-image-dir", type=str, help="Path to COCO train2014 images.")

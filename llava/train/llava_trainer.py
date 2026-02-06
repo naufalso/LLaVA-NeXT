@@ -524,6 +524,25 @@ class LLaVATrainer(Trainer):
             self._save_mezo_state(output_dir)
         return ret
 
+    def _ensure_generation_config_for_save(self):
+        """
+        Transformers 4.44 validates that sampling params are only set when
+        ``do_sample`` is True. Some pretrained generation configs ship with
+        ``do_sample=False`` but non-default ``temperature``/``top_p`` values,
+        which raises during checkpoint save. We normalize those values before
+        delegating to the base Trainer save path.
+        """
+
+        gen_config = getattr(self.model, "generation_config", None)
+        if gen_config is None:
+            return
+
+        if not getattr(gen_config, "do_sample", False):
+            if hasattr(gen_config, "temperature") and gen_config.temperature not in (None, 1.0):
+                gen_config.temperature = 1.0
+            if hasattr(gen_config, "top_p") and gen_config.top_p not in (None, 1.0):
+                gen_config.top_p = 1.0
+
     ########################
     # MeZO-specific Methods
     ########################
@@ -788,6 +807,7 @@ class LLaVATrainer(Trainer):
         if getattr(self.args, "tune_mm_mlp_adapter", False):
             pass
         else:
+            self._ensure_generation_config_for_save()
             super(LLaVATrainer, self)._save(output_dir, state_dict)
 
     def _inner_training_loop(self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None):
