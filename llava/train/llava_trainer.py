@@ -1,5 +1,6 @@
 import functools
 import os
+import glob
 import torch
 import torch.nn as nn
 import datetime
@@ -82,6 +83,31 @@ except ImportError:
     tpu_spmd_dataloader = None
 
 from llava.utils import rank0_print
+
+
+def _has_deepspeed_checkpoint(checkpoint_dir: str) -> bool:
+    if not checkpoint_dir or not os.path.isdir(checkpoint_dir):
+        return False
+
+    patterns = [
+        "global_step*",
+        "mp_rank_*_model_states.pt",
+        "zero_pp_rank_*_model_states.pt",
+        "zero_pp_rank_*",
+        "zero_stage_*",
+        "optimizer.pt",
+    ]
+
+    for pattern in patterns:
+        if glob.glob(os.path.join(checkpoint_dir, pattern)):
+            return True
+
+    if glob.glob(os.path.join(checkpoint_dir, "**/mp_rank_*_model_states.pt"), recursive=True):
+        return True
+    if glob.glob(os.path.join(checkpoint_dir, "**/zero_pp_rank_*_model_states.pt"), recursive=True):
+        return True
+
+    return False
 
 
 def plot_graphs_based_on_log_history(log_history, output_dir, metrics):
@@ -543,6 +569,63 @@ class LLaVATrainer(Trainer):
             if hasattr(gen_config, "top_p") and gen_config.top_p not in (None, 1.0):
                 gen_config.top_p = 1.0
 
+    def _is_only_mm_adapter_training(self) -> bool:
+        if getattr(self.args, "tune_mm_mlp_adapter", False):
+            return True
+
+        mm_parts = getattr(self.args, "mm_tunable_parts", None)
+        if not mm_parts:
+            return False
+
+        parts = [p.strip() for p in mm_parts.split(",") if p.strip()]
+        return len(parts) == 1 and any(part in ["mm_mlp_adapter", "mm_vision_resampler"] for part in parts)
+
+    def _try_weights_only_resume(self, resume_from_checkpoint: str) -> bool:
+        """
+        Fallback path when DeepSpeed checkpoint is unavailable.
+        Loads available weights (mm_projector/adapter or full model) and returns True on success.
+        """
+        if not resume_from_checkpoint or not os.path.isdir(resume_from_checkpoint):
+            return False
+
+        weight_candidates = [
+            os.path.join(resume_from_checkpoint, "mm_projector.bin"),
+            os.path.join(resume_from_checkpoint, "adapter_model.bin"),
+        ]
+
+        for weight_path in weight_candidates:
+            if os.path.isfile(weight_path) and self._is_only_mm_adapter_training():
+                try:
+                    state_dict = torch.load(weight_path, map_location="cpu")
+                    from transformers.modeling_utils import unwrap_model
+
+                    target_model = unwrap_model(self.model)
+                    missing_keys, unexpected_keys = target_model.load_state_dict(state_dict, strict=False)
+                    logger.warning(
+                        "DeepSpeed checkpoint not found. Loaded adapter weights from %s. "
+                        "Missing keys: %d, unexpected keys: %d.",
+                        weight_path,
+                        len(missing_keys),
+                        len(unexpected_keys),
+                    )
+                    return True
+                except Exception as exc:
+                    logger.warning("Failed to load adapter weights from %s: %s", weight_path, exc)
+
+        full_weight_candidates = [
+            os.path.join(resume_from_checkpoint, "pytorch_model.bin"),
+            os.path.join(resume_from_checkpoint, "model.safetensors"),
+        ]
+        if any(os.path.isfile(path) for path in full_weight_candidates):
+            try:
+                self._load_from_checkpoint(resume_from_checkpoint, self.model)
+                logger.warning("DeepSpeed checkpoint not found. Loaded full model weights from %s.", resume_from_checkpoint)
+                return True
+            except Exception as exc:
+                logger.warning("Failed to load full model weights from %s: %s", resume_from_checkpoint, exc)
+
+        return False
+
     ########################
     # MeZO-specific Methods
     ########################
@@ -798,6 +881,12 @@ class LLaVATrainer(Trainer):
             if self.args.local_rank == 0 or self.args.local_rank == -1:
                 self.model.config.save_pretrained(output_dir)
                 torch.save(weight_to_save, os.path.join(output_dir, f"mm_projector.bin"))
+                # Save trainer state so we can continue from the last step even without DeepSpeed checkpoints.
+                try:
+                    self.state.save_to_json(os.path.join(output_dir, TRAINER_STATE_NAME))
+                    self._save_rng_state(output_dir)
+                except Exception as exc:
+                    logger.warning("Failed to save trainer state for adapter-only checkpoint: %s", exc)
         else:
             if "TrainerControl" not in self.state.stateful_callbacks:
                 self.state.stateful_callbacks["TrainerControl"] = self.control.state()
@@ -892,6 +981,19 @@ class LLaVATrainer(Trainer):
             self.lr_scheduler = None
             self._created_lr_scheduler = False
 
+        weights_only_resume = False
+        if resume_from_checkpoint is not None and self.is_deepspeed_enabled:
+            if not _has_deepspeed_checkpoint(resume_from_checkpoint):
+                logger.warning(
+                    "DeepSpeed checkpoint not found at %s. Falling back to weights-only resume before DeepSpeed init.",
+                    resume_from_checkpoint,
+                )
+                weights_only_resume = self._try_weights_only_resume(resume_from_checkpoint)
+                if not weights_only_resume:
+                    raise FileNotFoundError(
+                        f"No DeepSpeed checkpoint files found under {resume_from_checkpoint}"
+                    )
+
         if self.is_deepspeed_enabled:
             ########################
             # Changed Code
@@ -977,12 +1079,30 @@ class LLaVATrainer(Trainer):
         # ckpt loading
         if resume_from_checkpoint is not None:
             if self.is_deepspeed_enabled:
-                deepspeed_load_checkpoint(self.model_wrapped, resume_from_checkpoint, load_module_strict=not _is_peft_model(self.model))
+                if not weights_only_resume:
+                    try:
+                        deepspeed_load_checkpoint(
+                            self.model_wrapped,
+                            resume_from_checkpoint,
+                            load_module_strict=not _is_peft_model(self.model),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "DeepSpeed checkpoint load failed (%s). Falling back to weights-only resume.",
+                            exc,
+                        )
+                        weights_only_resume = self._try_weights_only_resume(resume_from_checkpoint)
+                        if not weights_only_resume:
+                            raise
             elif is_sagemaker_mp_enabled() or self.is_fsdp_enabled:
                 self._load_from_checkpoint(resume_from_checkpoint, self.model_wrapped)
 
         # Check if saved optimizer or scheduler states exist
-        self._load_optimizer_and_scheduler(resume_from_checkpoint)
+        if weights_only_resume:
+            logger.warning("Skipping optimizer/scheduler load due to weights-only resume.")
+            self._load_optimizer_and_scheduler(None)
+        else:
+            self._load_optimizer_and_scheduler(resume_from_checkpoint)
 
         # important: at this point:
         # self.model         is the Transformers Model
@@ -1008,8 +1128,22 @@ class LLaVATrainer(Trainer):
         steps_trained_progress_bar = None
 
         # Check if continuing training from a checkpoint
-        if resume_from_checkpoint is not None and os.path.isfile(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)):
-            self.state = TrainerState.load_from_json(os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME))
+        trainer_state_path = None
+        if resume_from_checkpoint is not None:
+            checkpoint_state = os.path.join(resume_from_checkpoint, TRAINER_STATE_NAME)
+            if os.path.isfile(checkpoint_state):
+                trainer_state_path = checkpoint_state
+            elif weights_only_resume:
+                fallback_state = os.path.join(self.args.output_dir, TRAINER_STATE_NAME)
+                if os.path.isfile(fallback_state):
+                    trainer_state_path = fallback_state
+                    logger.warning(
+                        "Trainer state not found in checkpoint. Using state from output_dir: %s",
+                        fallback_state,
+                    )
+
+        if trainer_state_path is not None:
+            self.state = TrainerState.load_from_json(trainer_state_path)
             self.compare_trainer_and_checkpoint_args(self.args, self.state)
             epochs_trained = self.state.global_step // num_update_steps_per_epoch
             if not args.ignore_data_skip:
