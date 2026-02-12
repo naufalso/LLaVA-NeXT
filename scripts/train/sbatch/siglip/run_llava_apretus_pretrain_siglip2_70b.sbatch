@@ -1,21 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_next_apertus_siglip2_pretrain_70b
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
-#SBATCH --nodes=1
+#SBATCH --nodes=16
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
-#SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --gpus-per-node=4
+#SBATCH --time=24:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
+# ---------------- Env ----------------
 
-#--qos=boost_qos_dbg
-
-export WANDB_DISABLED=true
+# export WANDB_DISABLED=true
 # export HF_HOME=/leonardo_work/EUHPC_R04_192/fmohamma/Adversarial_Robust_Clip/llava_data/weights/.cache/huggingface
 export HF_HOME=/leonardo_scratch/large/userexternal/fmohamma/huggingface
 export TRANSFORMERS_CACHE=$HF_HOME/transformers
@@ -27,6 +25,7 @@ export HF_HUB_OFFLINE=1    # enforce offline mode
 # NCCL (set to your fabric; commonly ib0 on Leonardo)
 export NCCL_DEBUG=INFO
 export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 echo "--- Slurm Job Setup ---"
 echo "Job ID: $SLURM_JOB_ID"
@@ -57,19 +56,60 @@ echo "   MASTER_PORT:        $MASTER_PORT"
 echo "   RDZV_ID:            $RDZV_ID"
 echo "---------------------------------------------------"
 
+
 echo "Launching with torchrun across $SLURM_JOB_NUM_NODES nodes x $SLURM_GPUS_ON_NODE GPUs"
+
+export WANDB_MODE=offline
+
+LLM_VERSION="playground/models/Apertus-70B-Instruct-2509"
+LLM_VERSION_CLEAN="apertus-70B-Instruct-2509"
+VISION_MODEL_VERSION="checkpoints/google/siglip2-so400m-patch14-384"
+VISION_MODEL_VERSION_CLEAN="${VISION_MODEL_VERSION//\//_}"
+
+############### Pretrain ################
+
+PROMPT_VERSION=plain
+DATA_PATH="./playground/data/blip_laion_cc_sbu_558k.json"
+IMAGE_PATH="./playground/data/images"
+
+BASE_RUN_NAME="llavanext-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-mlp2x_gelu-pretrain_blip558k_plain"
+echo "BASE_RUN_NAME: ${BASE_RUN_NAME}"
 
 source .venv/bin/activate
 
 nvidia-smi
 
-# playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
+srun bash -c "echo \"[SRUN] Executing on \$(hostname): torchrun with --nnodes=${NUM_NODES}\" 
+exec torchrun --nproc_per_node="${GPUS_PER_NODE}" --nnodes="${NUM_NODES}" --rdzv_id ${RDZV_ID} --rdzv_backend=c10d --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    llava/train/train_mem.py \
+    --deepspeed scripts/zero3_offload.json \
+    --model_name_or_path ${LLM_VERSION} \
+    --version ${PROMPT_VERSION} \
+    --data_path ${DATA_PATH} \
+    --image_folder ${IMAGE_PATH} \
+    --vision_tower ${VISION_MODEL_VERSION} \
+    --mm_tunable_parts "mm_mlp_adapter" \
+    --mm_vision_select_layer -2 \
+    --mm_projector_type mlp2x_gelu \
+    --mm_use_im_start_end False \
+    --mm_use_im_patch_token False \
+    --bf16 True \
+    --output_dir ./checkpoints/projectors/${BASE_RUN_NAME} \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 1 \
+    --per_device_eval_batch_size 1 \
+    --gradient_accumulation_steps 4 \
+    --save_steps 800 \
+    --learning_rate 1e-3 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --tf32 True \
+    --model_max_length 2048 \
+    --gradient_checkpointing True \
+    --dataloader_num_workers 16 \
+    --lazy_preprocess True \
+    --attn_implementation sdpa"
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
-    --debug
-echo "Inference test completed."
+# You can delete the sdpa attn_implementation if you want to use flash attn

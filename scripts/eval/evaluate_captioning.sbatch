@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_captioning_eval
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --time=02:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
 
 #--qos=boost_qos_dbg
@@ -47,7 +46,7 @@ echo
 echo " Rendezvous Setup:"
 # ---------- Torch-distributed rendezvous ----------
 NUM_NODES=${SLURM_JOB_NUM_NODES}
-GPUS_PER_NODE=${SLURM_GPUS_ON_NODE}   
+GPUS_PER_NODE=${SLURM_GPUS_ON_NODE}
 MASTER_ADDR=$(scontrol show hostnames "$SLURM_NODELIST" | head -n1)
 MASTER_PORT=$((20000 + RANDOM % 10000))
 export MASTER_ADDR MASTER_PORT
@@ -60,16 +59,43 @@ echo "---------------------------------------------------"
 echo "Launching with torchrun across $SLURM_JOB_NUM_NODES nodes x $SLURM_GPUS_ON_NODE GPUs"
 
 source .venv/bin/activate
+module load openjdk/11.0.20.1_1
+module load ninja/1.11.1
 
 nvidia-smi
 
-# playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
+echo "Starting captioning eval..."
+DATASET=${1:-coco}
+MODEL_PATH=${2:-checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt}
+OUTPUT=${3:-results_debug/llava-next-apertus-8b.json}
+DATA_ROOT=${4:-/leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/playground/eval_data}
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
-    --debug
-echo "Inference test completed."
+if [[ "$DATASET" == "coco" ]]; then
+	python -m llava.eval.evaluation_captioning \
+		--dataset coco \
+		--model-path "$MODEL_PATH" \
+		--output "$OUTPUT" \
+		--temperature 0.0 \
+		--debug \
+        --sample-eval \
+		--coco-train-image-dir $DATA_ROOT/coco/train2014 \
+		--coco-val-image-dir $DATA_ROOT/coco/val2014 \
+		--coco-karpathy-json $DATA_ROOT/coco/annotations/karpathy_coco.json \
+		--coco-annotations-json $DATA_ROOT/coco/annotations/captions_val2014.json
+elif [[ "$DATASET" == "flickr" ]]; then
+	python -m llava.eval.evaluation_captioning \
+		--dataset flickr \
+		--model-path "$MODEL_PATH" \
+		--output "$OUTPUT" \
+		--temperature 0.0 \
+		--debug \
+        --sample-eval \
+		--flickr-image-dir $DATA_ROOT/flickr30k/flickr30k-images \
+		--flickr-karpathy-json $DATA_ROOT/flickr30k/karpathy_flickr30k.json \
+		--flickr-annotations-json $DATA_ROOT/flickr30k/dataset_flickr30k_coco_style.json
+else
+	echo "Unknown dataset: $DATASET (expected 'coco' or 'flickr')"
+	exit 1
+fi
+
+echo "Inference eval completed."

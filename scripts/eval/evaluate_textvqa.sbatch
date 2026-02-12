@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_textvqa_eval
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --time=24:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
 
 #--qos=boost_qos_dbg
@@ -60,16 +59,27 @@ echo "---------------------------------------------------"
 echo "Launching with torchrun across $SLURM_JOB_NUM_NODES nodes x $SLURM_GPUS_ON_NODE GPUs"
 
 source .venv/bin/activate
+module load openjdk/11.0.20.1_1
+module load ninja/1.11.1
 
 nvidia-smi
 
-# playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
+echo "Starting TextVQA eval..."
+MODEL_PATH="${1:-checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt}"
+OUTPUT="${2:-results_debug/textvqa/llava-next-apertus-8b-textvqa.json}"
+DATA_ROOT=${3:-/leonardo_work/EUHPC_R04_192/fmohamma/Adversarial_Robust_Clip/llava_data/eval_benchmarks}
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
-    --debug
-echo "Inference test completed."
+python -m llava.eval.evaluate_vqa \
+    --dataset textvqa \
+    --model-path "$MODEL_PATH" \
+    --output "$OUTPUT" \
+    --temperature 0.0 \
+    --max-new-tokens 16 \
+    --debug \
+    --textvqa-image-dir $DATA_ROOT/textvqa/train_images \
+    --textvqa-questions-json $DATA_ROOT/textvqa/val_questions_vqa_format.json \
+    --textvqa-annotations-json $DATA_ROOT/textvqa/val_annotations_vqa_format.json
+
+echo "TextVQA eval completed."
+
+    # --sample-size 500 \

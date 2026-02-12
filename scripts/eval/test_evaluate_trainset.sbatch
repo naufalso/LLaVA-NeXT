@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_trainset_eval
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --time=01:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
 
 #--qos=boost_qos_dbg
@@ -65,11 +64,15 @@ nvidia-smi
 
 # playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
+echo "Starting eval test..."
+MODEL_PATH="${1:-checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt}"
+OUTPUT="${2:-results_debug/llava-next-apertus-8b.json}"
+
+python -m llava.eval.evaluate_trainset \
+    --model-path "$MODEL_PATH" \
+    --output "$OUTPUT" \
+    --dataset-path playground/data_all/llava_v1_5_mix665k.json \
+    --temperature 0.0 \
+    --sample-size 100 \
     --debug
-echo "Inference test completed."
+echo "Inference eval completed."

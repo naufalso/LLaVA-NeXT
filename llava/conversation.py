@@ -622,7 +622,7 @@ conv_apertus_ori = Conversation(
     sep2="<|user_end|>",
     stop_str="<|assistant_end|>",
     tokenizer_id="swiss-ai/Apertus-8B-Instruct-2509",
-    tokenizer=safe_load_tokenizer("swiss-ai/Apertus-8B-Instruct-2509"),
+    tokenizer=safe_load_tokenizer("playground/models/Apertus-8B-Instruct-2509"),
 )
 
 default_conversation = conv_vicuna_v0

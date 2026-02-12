@@ -7,18 +7,15 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node=1
 #SBATCH --time=00:30:00
-#SBATCH --output=./logs/out/%x-%j.out
-#SBATCH --error=./logs/err/%x-%j.out
+#SBATCH --output=./logs/eval/%x-%j.out
+#SBATCH --error=./logs/eval/%x-%j.err
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-
-# --qos=boost_qos_dbg
+#SBATCH --qos=boost_qos_dbg
 
 # ---------------- Env ----------------
 source .venv/bin/activate
 module load openjdk/11.0.20.1_1
 module load ninja/1.11.1
-
-export WANDB_DISABLED=true
 
 export WANDB_DISABLED=true
 # export HF_HOME=/leonardo_work/EUHPC_R04_192/fmohamma/Adversarial_Robust_Clip/llava_data/weights/.cache/huggingface
@@ -48,6 +45,13 @@ eps=${15:-2}
 steps=${16:-100}
 results_folder=${17:-Evaluations_Leonardo}
 
+# Get the model name from the model path
+MODEL_NAME=$(basename $MODEL_PATH)
+
+# Create result_debug/MODEL_NAME directory if it doesn't exist
+results_dir="./results_debug/${MODEL_NAME}"
+mkdir -p $results_dir
+
 # echo all arguments
 echo "All arguments: $@"
 
@@ -74,16 +78,16 @@ python -m vlm_eval.run_evaluation \
 --eval_multitrust $mt_trust \
 --attack $attack --eps $eps --steps $steps --mask_out none \
 --vision_encoder_pretrained none \
---precision float16 \
+--precision bfloat16 \
 --num_samples 500 \
 --shots 0 \
 --batch_size 1 \
 --results_file llava \
 --model llava \
---temperature 0.8 \
+--temperature 0.0 \
 --num_beams 1 \
 --out_save_path $MODEL_PATH \
---out_base_path ./results_debug \
+--out_base_path $results_dir \
 --model_path $MODEL_PATH \
 --coco_train_image_dir_path $DATA_ROOT/coco/train2014 \
 --coco_val_image_dir_path $DATA_ROOT/coco/val2014 \

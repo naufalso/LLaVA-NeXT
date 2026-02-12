@@ -1,19 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_next_qwen25_clip_pretrain
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
-#SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --gpus-per-node=4
+#SBATCH --time=24:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
 
-#--qos=boost_qos_dbg
+# ---------------- Env ----------------
 
 export WANDB_DISABLED=true
 # export HF_HOME=/leonardo_work/EUHPC_R04_192/fmohamma/Adversarial_Robust_Clip/llava_data/weights/.cache/huggingface
@@ -57,19 +56,67 @@ echo "   MASTER_PORT:        $MASTER_PORT"
 echo "   RDZV_ID:            $RDZV_ID"
 echo "---------------------------------------------------"
 
+
 echo "Launching with torchrun across $SLURM_JOB_NUM_NODES nodes x $SLURM_GPUS_ON_NODE GPUs"
+
+export WANDB_MODE=offline
+
+
+LLM_VERSION="models/Qwen/Qwen2.5-7B-Instruct"
+# "playground/models/Apertus-8B-Instruct-2509"
+LLM_VERSION_CLEAN="Qwen/Qwen2.5-7B-Instruct"
+VISION_MODEL_VERSION="openai/clip-vit-large-patch14-336"
+VISION_MODEL_VERSION_CLEAN="${VISION_MODEL_VERSION//\//_}"
+
+VISION_TOWER="/leonardo_work/EUHPC_R04_192/fmohamma/Adversarial_Robust_Clip/llava_data/weights/clip-vit-large-patch14-336"
+
+############### Pretrain ################
+
+PROMPT_VERSION=plain
+
+DATA_PATH="./playground/data/blip_laion_cc_sbu_558k.json"
+IMAGE_PATH="./playground/data/images"
+
+BASE_RUN_NAME="llavanext-${VISION_MODEL_VERSION_CLEAN}-${LLM_VERSION_CLEAN}-mlp2x_gelu-blip558k_plain_batch256_pretrain"
+echo "BASE_RUN_NAME: ${BASE_RUN_NAME}"
 
 source .venv/bin/activate
 
 nvidia-smi
 
-# playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
+torchrun --nproc_per_node="${GPUS_PER_NODE}" --nnodes="${NUM_NODES}" --rdzv_id ${RDZV_ID} --rdzv_backend=c10d --rdzv_endpoint=${MASTER_ADDR}:${MASTER_PORT} \
+    llava/train/train_mem.py \
+    --deepspeed scripts/zero2.json \
+    --model_name_or_path ${LLM_VERSION} \
+    --version ${PROMPT_VERSION} \
+    --data_path ${DATA_PATH} \
+    --image_folder ${IMAGE_PATH} \
+    --vision_tower ${VISION_TOWER} \
+    --mm_tunable_parts "mm_mlp_adapter" \
+    --mm_vision_select_layer -2 \
+    --mm_projector_type mlp2x_gelu \
+    --mm_use_im_start_end False \
+    --mm_use_im_patch_token False \
+    --bf16 True \
+    --output_dir ./checkpoints/projectors/${BASE_RUN_NAME} \
+    --num_train_epochs 1 \
+    --per_device_train_batch_size 16 \
+    --per_device_eval_batch_size 4 \
+    --gradient_accumulation_steps 4 \
+    --save_strategy "no" \
+    --save_steps 5000 \
+    --learning_rate 1e-3 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --tf32 True \
+    --model_max_length 8192 \
+    --gradient_checkpointing True \
+    --dataloader_num_workers 16 \
+    --lazy_preprocess True \
+    --attn_implementation sdpa
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
-    --debug
-echo "Inference test completed."
+#     --report_to wandb \
+# --run_name $BASE_RUN_NAME \
+    # --evaluation_strategy "no" \

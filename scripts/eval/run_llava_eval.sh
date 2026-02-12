@@ -16,6 +16,10 @@ GPU=0
 # vizwiz=${9:-false}
 # okvqa=${10:-false}
 # mt_trust=${11:-false}
+# eval_multilingual_llavabench=${12:-false}
+# eval_multilingual_llavabench_lang=${13:-english}
+
+# AFTER_JOB=27938159
 
 if [ $TASK -eq 0 ]; then
 
@@ -26,17 +30,17 @@ if [ $TASK -eq 0 ]; then
 
     # sbatch --job-name=llava_eval_coco_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false true false false false false false false english $ATTACK $EPSILON $STEPS
 
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false true false false false false false english $ATTACK $EPSILON $STEPS
-
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false true false false false false english $ATTACK $EPSILON $STEPS
-
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false true false false false english $ATTACK $EPSILON $STEPS
-
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false true false false english $ATTACK $EPSILON $STEPS
-
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false false true false english $ATTACK $EPSILON $STEPS
+    # sbatch --job-name=llava_eval_vqav2_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false true false false false false false english $ATTACK $EPSILON $STEPS
     
-    # sbatch scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false false false true english $ATTACK $EPSILON $STEPS
+    # sbatch --job-name=llava_eval_textvqa_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false true false false false false english $ATTACK $EPSILON $STEPS
+
+    # sbatch --job-name=llava_eval_vizwiz_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false true false false false english $ATTACK $EPSILON $STEPS
+
+    # sbatch --job-name=llava_eval_okvqa_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false true false false english $ATTACK $EPSILON $STEPS
+    
+    # sbatch --job-name=llava_eval_mt_trust_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false false true false english $ATTACK $EPSILON $STEPS
+    
+    # sbatch --job-name=llava_eval_eval_multilingual_llavabench_verbose scripts/eval/llava_eval.sbatch $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false false false true english $ATTACK $EPSILON $STEPS
 
 #   bash bash/llava_eval.sh $DATA_ROOT $MODEL_PATH $ENCODER $GPU false false false false false false false true arabic $ATTACK $EPSILON $STEPS
 

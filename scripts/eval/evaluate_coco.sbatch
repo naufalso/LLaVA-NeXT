@@ -1,16 +1,15 @@
 #!/bin/bash
-#SBATCH --job-name=llava_apertus_inference_dbg
+#SBATCH --job-name=llava_coco_eval
 #SBATCH --account=EUHPC_R04_192
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1             # one launcher per node
 #SBATCH --cpus-per-task=32
 #SBATCH --gpus-per-node=1
-#SBATCH --time=00:30:00
+#SBATCH --time=10:00:00
 #SBATCH --output=./logs/out/%x-%j.out
 #SBATCH --error=./logs/err/%x-%j.out
 #SBATCH --signal=B:TERM@120           # give 120s to checkpoint on preemption/node issues
-#SBATCH --qos=boost_qos_dbg
 
 
 #--qos=boost_qos_dbg
@@ -60,16 +59,29 @@ echo "---------------------------------------------------"
 echo "Launching with torchrun across $SLURM_JOB_NUM_NODES nodes x $SLURM_GPUS_ON_NODE GPUs"
 
 source .venv/bin/activate
+module load openjdk/11.0.20.1_1
+module load ninja/1.11.1
 
 nvidia-smi
 
 # playground/eval_data/flickr30k/flickr30k-images/4464247181.jpg \
 
-echo "Starting inference test..."
-python -m llava.serve.cli \
-    --model-path checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt \
-    --image-file /leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/llava/serve/examples/extreme_ironing.jpg \
-    --non-interactive \
-    --temperature 0.2 \
-    --debug
-echo "Inference test completed."
+echo "Starting eval test..."
+MODEL_PATH="${1:-checkpoints/llava-next-apertus-8b-finetune-full-apertusprompt}"
+OUTPUT="${2:-results_debug/llava-next-apertus-8b.json}"
+DATA_ROOT=${3:-/leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/playground/eval_data}
+
+python -m llava.eval.evaluation_captioning \
+    --dataset coco \
+    --model-path "$MODEL_PATH" \
+    --output "$OUTPUT" \
+    --temperature 0.0 \
+    --debug \
+    --coco-train-image-dir $DATA_ROOT/coco/train2014 \
+    --coco-val-image-dir $DATA_ROOT/coco/val2014 \
+    --coco-karpathy-json $DATA_ROOT/coco/annotations/karpathy_coco.json \
+    --coco-annotations-json $DATA_ROOT/coco/annotations/captions_val2014.json
+
+#     --sample-size 500 \
+
+echo "Inference eval completed."
