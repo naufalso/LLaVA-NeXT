@@ -168,7 +168,7 @@ bash scripts/eval/run_lmms_eval.sh /path/to/llava-next-apertus-8b-finetune-full
 bash scripts/eval/run_lmms_eval.sh /path/to/model "ai2d,chartqa,mme" 4
 ```
 
-Since `lmms-eval` is installed in editable mode from the submodule, you can modify or add evaluation tasks directly in the `lmms-eval/` directory and your changes will take effect immediately. See the [lmms-eval documentation](./lmms-eval/README.md) for details on creating custom tasks.
+Since `lmms-eval` is installed in editable mode from the submodule, you can modify or add evaluation tasks directly in the `lmms-eval/` directory and your changes will take effect immediately. See the [lmms-eval documentation](https://github.com/EvolvingLMMs-Lab/lmms-eval#readme) for details on creating custom tasks.
 
 ## SGLang for SpeedUp Inference and Deployment
 

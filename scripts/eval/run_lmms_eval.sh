@@ -25,7 +25,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # ---- Configuration (override via arguments or environment) ----
 MODEL_PATH="${1:-${LLAVA_MODEL_PATH:-}}"
-TASKS="${2:-ai2d,chartqa,docvqa_val,infovqa_val,mme,realworldqa,mathvista_testmini,mmvet,mmbench_en_dev,ocrbench,mmmu,seedbench,scienceqa_img,mmstar}"
+# Default benchmark tasks for LLaVA Apertus evaluation
+DEFAULT_TASKS="ai2d,chartqa,docvqa_val,infovqa_val,mme,realworldqa"
+DEFAULT_TASKS="${DEFAULT_TASKS},mathvista_testmini,mmvet,mmbench_en_dev,ocrbench"
+DEFAULT_TASKS="${DEFAULT_TASKS},mmmu,seedbench,scienceqa_img,mmstar"
+
+TASKS="${2:-$DEFAULT_TASKS}"
 NUM_GPUS="${3:-${LLAVA_NUM_GPUS:-1}}"
 BATCH_SIZE="${4:-${LLAVA_BATCH_SIZE:-1}}"
 OUTPUT_DIR="${5:-${LLAVA_OUTPUT_DIR:-./logs}}"
