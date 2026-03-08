@@ -105,7 +105,13 @@ We use the [lmms-eval](https://github.com/EvolvingLMMs-Lab/lmms-eval) toolkit to
 
 Install lmms-eval:
 
-> pip install git+https://github.com/EvolvingLMMs-Lab/lmms-eval.git
+```bash
+# Option 1: Install from the included submodule (recommended for development)
+bash scripts/setup_lmms_eval.sh
+
+# Option 2: Install directly from GitHub
+pip install git+https://github.com/EvolvingLMMs-Lab/lmms-eval.git
+```
 
 ### Reproducing Evaluation Results
 
