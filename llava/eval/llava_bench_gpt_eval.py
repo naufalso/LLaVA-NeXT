@@ -87,17 +87,17 @@ def build_caption_eval_prompt(
     )
 
 
-def iter_result_files(results_dir: str, language: Optional[str]) -> Iterable[str]:
+def iter_result_files(results_dir: str, language: Optional[str], file_pattern: str = "*.json") -> Iterable[str]:
     if language:
         lang_dir = os.path.join(results_dir, language)
         if not os.path.isdir(lang_dir):
             raise FileNotFoundError(f"Language directory not found: {lang_dir}")
-        yield from sorted(glob.glob(os.path.join(lang_dir, "*.json")))
+        yield from sorted(glob.glob(os.path.join(lang_dir, file_pattern)))
         return
 
     for lang_dir in sorted(glob.glob(os.path.join(results_dir, "*"))):
         if os.path.isdir(lang_dir):
-            yield from sorted(glob.glob(os.path.join(lang_dir, "*.json")))
+            yield from sorted(glob.glob(os.path.join(lang_dir, file_pattern)))
 
 
 def load_existing_reviews(output_path: str) -> Dict[int, Dict]:
@@ -246,6 +246,11 @@ if __name__ == "__main__":
         default="/leonardo_work/EUHPC_R04_192/fmohamma/LLaVA-NeXT/playground/eval_data/rule.json",
         help="Rule JSON path for prompt templates.",
     )
+    parser.add_argument(
+        "--file-pattern",
+        default="*.json",
+        help="Glob pattern to match result files within each language directory.",
+    )
     parser.add_argument("--language", default=None, help="Evaluate only a single language folder.")
     parser.add_argument("--judge-model", default="openai/gpt-4.1-nano", help="OpenAI model for judging.")
     parser.add_argument("--max-tokens", type=int, default=256, help="Maximum output tokens for the judge.")
@@ -267,7 +272,7 @@ if __name__ == "__main__":
     rule_map = load_rule_map(os.path.expanduser(args.rule_path))
     os.makedirs(output_dir, exist_ok=True)
 
-    for results_path in iter_result_files(results_dir, args.language):
+    for results_path in iter_result_files(results_dir, args.language, args.file_pattern):
         lang_name = os.path.basename(os.path.dirname(results_path))
         context_path = os.path.join(context_dir, lang_name, "context.jsonl")
         context_map = load_context_map(context_path)
