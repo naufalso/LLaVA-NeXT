@@ -30,6 +30,7 @@ class CLIPVisionTower(nn.Module):
             rank0_print(f"The checkpoint seems to contain `vision_tower` weights: `mm_tunable_parts` contains `mm_vision_tower`.")
             self.load_model()
         else:
+            print(f"Loading config only for {self.vision_tower_name}")
             self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
 
     def load_model(self, device_map=None):

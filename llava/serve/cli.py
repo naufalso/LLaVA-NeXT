@@ -29,10 +29,12 @@ def main(args):
     disable_torch_init()
 
     model_name = get_model_name_from_path(args.model_path)
-    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit)
+    tokenizer, model, image_processor, context_len = load_pretrained_model(args.model_path, args.model_base, model_name, args.load_8bit, args.load_4bit, torch_dtype=args.dtype)
 
     if "llama-2" in model_name.lower():
         conv_mode = "llava_llama_2"
+    elif "apertus" in model_name.lower():
+        conv_mode = "apertus_ori"
     elif "v1" in model_name.lower():
         conv_mode = "llava_v1"
     elif "mpt" in model_name.lower():
@@ -52,19 +54,14 @@ def main(args):
         roles = conv.roles
 
     image = load_image(args.image_file)
-    image_tensor = image_processor.preprocess(image, return_tensors="pt")["pixel_values"].half().cuda()
+    image_tensor = image_processor.preprocess(image, return_tensors="pt")["pixel_values"].cuda()
+    # Ensure image_tensor matches model dtype
+    image_tensor = image_tensor.to(dtype=model.dtype)
 
-    while True:
-        try:
-            inp = input(f"{roles[0]}: ")
-        except EOFError:
-            inp = ""
-        if not inp:
-            print("exit...")
-            break
 
-        print(f"{roles[1]}: ", end="")
-
+    if args.non_interactive:
+        inp = "Describe the image in detail"
+        print(f"{roles[0]}: {inp}")
         if image is not None:
             # first message
             if model.config.mm_use_im_start_end:
@@ -81,18 +78,75 @@ def main(args):
 
         input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
         stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+        # Use stop_str from conversation config if available (e.g., for Apertus)
+        if hasattr(conv, 'stop_str') and conv.stop_str:
+            stop_str = conv.stop_str
         keywords = [stop_str]
         stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
-        streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+        # streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+        print(f"Input IDs shape: {input_ids.shape}")
+        print(f"Image Tensor shape: {image_tensor.shape}")
 
         with torch.inference_mode():
-            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=0.2, max_new_tokens=1024, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
+            output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, use_cache=True, stopping_criteria=[stopping_criteria])
 
-        outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
+        print(f"Output IDs shape: {output_ids.shape}")
+        print(f"Full decoded output: {tokenizer.decode(output_ids[0])}")
+        if torch.equal(output_ids[0, :input_ids.shape[1]], input_ids[0]):
+            print("The generated IDs contain the prompt IDs as prefix.")
+            outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
+        else:
+            print("The generated IDs do NOT contain the prompt IDs as prefix.")
+            outputs = tokenizer.decode(output_ids[0]).strip()
         conv.messages[-1][-1] = outputs
 
+        print(f"{roles[1]}: {outputs}")
         if args.debug:
             print("\n", {"prompt": prompt, "outputs": outputs}, "\n")
+    else:
+        while True:
+            try:
+                inp = input(f"{roles[0]}: ")
+            except EOFError:
+                inp = ""
+            if not inp:
+                print("exit...")
+                break
+
+            print(f"{roles[1]}: ", end="")
+
+            if image is not None:
+                # first message
+                if model.config.mm_use_im_start_end:
+                    inp = DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_TOKEN + DEFAULT_IM_END_TOKEN + "\n" + inp
+                else:
+                    inp = DEFAULT_IMAGE_TOKEN + "\n" + inp
+                conv.append_message(conv.roles[0], inp)
+                image = None
+            else:
+                # later messages
+                conv.append_message(conv.roles[0], inp)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+
+            input_ids = tokenizer_image_token(prompt, tokenizer, IMAGE_TOKEN_INDEX, return_tensors="pt").unsqueeze(0).cuda()
+            stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
+            # Use stop_str from conversation config if available (e.g., for Apertus)
+            if hasattr(conv, 'stop_str') and conv.stop_str:
+                stop_str = conv.stop_str
+            keywords = [stop_str]
+            stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+            streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+            with torch.inference_mode():
+                output_ids = model.generate(input_ids, images=image_tensor, do_sample=True, temperature=args.temperature, max_new_tokens=args.max_new_tokens, streamer=streamer, use_cache=True, stopping_criteria=[stopping_criteria])
+
+            outputs = tokenizer.decode(output_ids[0, input_ids.shape[1] :]).strip()
+            conv.messages[-1][-1] = outputs
+
+            if args.debug:
+                print("\n", {"prompt": prompt, "outputs": outputs}, "\n")
 
 
 if __name__ == "__main__":
@@ -106,6 +160,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
+    parser.add_argument("--dtype", type=str, default="float32")
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode with a default query.")
     args = parser.parse_args()
     main(args)

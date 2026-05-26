@@ -24,7 +24,7 @@ from llava.constants import DEFAULT_IMAGE_PATCH_TOKEN, DEFAULT_IM_START_TOKEN, D
 from llava.utils import rank0_print
 
 
-def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", torch_dtype="float16",attn_implementation="flash_attention_2", customized_config=None, overwrite_config=None, **kwargs):
+def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, load_4bit=False, device_map="auto", torch_dtype="float16", attn_implementation="sdpa", customized_config=None, overwrite_config=None, load_encoder=None, **kwargs):
     kwargs["device_map"] = device_map
 
     if load_8bit:
@@ -33,12 +33,11 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         kwargs["load_in_4bit"] = True
         kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.float16, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4")
     elif torch_dtype == "float16":
-        kwargs["torch_dtype"] = torch.float16
+        kwargs["dtype"] = torch.float16
     elif torch_dtype == "bfloat16":
-        kwargs["torch_dtype"] = torch.bfloat16
-    else:
-        import pdb;pdb.set_trace()
-
+        kwargs["dtype"] = torch.bfloat16
+    elif isinstance(torch_dtype, torch.dtype):
+        kwargs["dtype"] = torch_dtype
     if customized_config is not None:
         kwargs["config"] = customized_config
 
@@ -77,6 +76,12 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 lora_cfg_pretrained = LlavaGemmaConfig.from_pretrained(model_path)
                 tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
                 model = LlavaGemmaForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "apertus" in model_name.lower():
+                from llava.model.language_model.llava_apertus import LlavaApertusConfig
+
+                lora_cfg_pretrained = LlavaApertusConfig.from_pretrained(model_path)
+                tokenizer = AutoTokenizer.from_pretrained(model_base, use_fast=False)
+                model = LlavaApertusForCausalLM.from_pretrained(model_base, low_cpu_mem_usage=True, config=lora_cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
             else:
                 from llava.model.language_model.llava_llama import LlavaConfig
 
@@ -186,6 +191,8 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 or "llava-v1.6-34b" in model_name.lower()
                 or "llava-v1.5" in model_name.lower()
             ):
+
+                rank0_print(f"[DEBUG] Loading Tokenizer from: {model_path}")
                 from llava.model.language_model.llava_llama import LlavaConfig
 
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
@@ -231,6 +238,20 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
                 tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
                 cfg_pretrained = AutoConfig.from_pretrained(model_path)
                 model = LlavaGemmaForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, config=cfg_pretrained, attn_implementation=attn_implementation, **kwargs)
+            elif "apertus" in model_name.lower():
+                from llava.model.language_model.llava_apertus import LlavaApertusConfig
+
+                tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
+                if customized_config is None:
+                    llava_cfg = LlavaApertusConfig.from_pretrained(model_path)
+                else:
+                    llava_cfg = customized_config
+
+                if overwrite_config is not None:
+                    rank0_print(f"Overwriting config with {overwrite_config}")
+                    for k, v in overwrite_config.items():
+                        setattr(llava_cfg, k, v)
+                model = LlavaApertusForCausalLM.from_pretrained(model_path, low_cpu_mem_usage=True, attn_implementation=attn_implementation, config=llava_cfg, **kwargs)
             else:
                 try:
                     from llava.model.language_model.llava_llama import LlavaConfig
@@ -301,5 +322,10 @@ def load_pretrained_model(model_path, model_base, model_name, load_8bit=False, l
         context_len = model.config.tokenizer_model_max_length
     else:
         context_len = 2048
+
+    rank0_print(f"Tokenizer: {tokenizer.__class__.__name__ if tokenizer is not None else 'None'}")
+    rank0_print(f"Model: {model.__class__.__name__ if model is not None else 'None'}")
+    rank0_print(f"Image Processor: {image_processor.__class__.__name__ if image_processor is not None else 'None'}")
+    rank0_print(f"Context length: {context_len}")
 
     return tokenizer, model, image_processor, context_len

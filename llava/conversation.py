@@ -20,6 +20,8 @@ class SeparatorStyle(Enum):
     LLAMA_3 = auto()
     QWEN = auto()
     GEMMA = auto()
+    APERTUS = auto()
+    APERTUS_ORI = auto()
 
 
 @dataclasses.dataclass
@@ -172,6 +174,40 @@ class Conversation:
                     ret += message + seps[i % 2]
                 else:
                     ret += ""
+
+        elif self.sep_style == SeparatorStyle.APERTUS:
+            # Apertus uses special tokens: <|system_start|>, <|system_end|>, <|user_start|>, <|user_end|>, <|assistant_start|>, <|assistant_end|>
+            ret = ""
+            if self.system:
+                ret = "<|system_start|>" + self.system + "<|system_end|>"
+            for role, message in messages:
+                if message:
+                    if type(message) is tuple:
+                        message, _, _ = message
+                    if role == self.roles[0]:  # user
+                        ret += "<|user_start|>" + message + "<|user_end|>"
+                    else:  # assistant
+                        ret += "<|assistant_start|>" + message + "<|assistant_end|>"
+                else:
+                    if role == self.roles[0]:  # user
+                        ret += "<|user_start|>"
+                    else:  # assistant
+                        ret += "<|assistant_start|>"
+
+        elif self.sep_style == SeparatorStyle.APERTUS_ORI:
+            if self.tokenizer is None:
+                raise ValueError("Apertus tokenizer is not available. Make sure you have the necessary permissions.")
+            chat_template_messages = [{"role": "system", "content": self.system}]
+            for role, message in messages:
+                if message:
+                    if type(message) is tuple:
+                        message, images = message
+                        message = "<image>" * len(images) + message
+                    chat_template_messages.append({"role": role, "content": message})
+
+            # print(chat_template_messages)
+            return self.tokenizer.apply_chat_template(chat_template_messages, tokenize=False, add_generation_prompt=True)
+
         else:
             raise ValueError(f"Invalid style: {self.sep_style}")
 
@@ -288,7 +324,7 @@ class Conversation:
         return ret
 
     def copy(self):
-        return Conversation(system=self.system, roles=self.roles, messages=[[x, y] for x, y in self.messages], offset=self.offset, sep_style=self.sep_style, sep=self.sep, sep2=self.sep2, version=self.version)
+        return Conversation(system=self.system, roles=self.roles, messages=[[x, y] for x, y in self.messages], offset=self.offset, sep_style=self.sep_style, sep=self.sep, sep2=self.sep2, version=self.version, tokenizer_id=self.tokenizer_id, tokenizer=self.tokenizer, stop_str=self.stop_str, stop_token_ids=self.stop_token_ids, skip_next=self.skip_next)
 
     def dict(self):
         if len(self.get_images()) > 0:
@@ -380,7 +416,8 @@ conv_llava_llama_2 = Conversation(
 def safe_load_tokenizer(tokenizer_id):
     try:
         return AutoTokenizer.from_pretrained(tokenizer_id)
-    except Exception:
+    except Exception as e:
+        print(f"Error loading tokenizer {tokenizer_id}: {e}")
         return None
 
 conv_llava_llama_3 = Conversation(
@@ -562,6 +599,32 @@ Answer the questions.""",
     sep="<|im_end|>",
 )
 
+conv_apertus_instruct = Conversation(
+    system="You are Apertus, a helpful assistant created by the SwissAI initiative.",
+    roles=("user", "assistant"),
+    version="apertus",
+    messages=[],
+    offset=0,
+    sep_style=SeparatorStyle.APERTUS,
+    sep="<|assistant_end|>",
+    sep2="<|user_end|>",
+    stop_str="<|assistant_end|>",
+)
+
+conv_apertus_ori = Conversation(
+    system="You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.", #"You are Apertus, a helpful assistant created by the SwissAI initiative.",
+    roles=("user", "assistant"),
+    version="apertus_ori",
+    messages=[],
+    offset=0,
+    sep_style=SeparatorStyle.APERTUS_ORI,
+    sep="<|assistant_end|>",
+    sep2="<|user_end|>",
+    stop_str="<|assistant_end|>",
+    tokenizer_id="swiss-ai/Apertus-8B-Instruct-2509",
+    tokenizer=safe_load_tokenizer("swiss-ai/Apertus-8B-Instruct-2509"),
+)
+
 default_conversation = conv_vicuna_v0
 conv_templates = {
     "default": conv_vicuna_v0,
@@ -590,6 +653,9 @@ conv_templates = {
     "qwen_2": conv_qwen,
     "qwen_2_5": conv_qwen_2_5,
     "gemma_instruct": conv_gemma_instruct,
+    "apertus": conv_apertus_instruct,
+    "apertus_instruct": conv_apertus_instruct,
+    "apertus_ori": conv_apertus_ori,
 }
 
 

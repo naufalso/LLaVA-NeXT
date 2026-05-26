@@ -481,6 +481,234 @@ def preprocess_llama_2(sources, tokenizer: transformers.PreTrainedTokenizer, has
     )
 
 
+def preprocess_apertus(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False,
+    max_len=2048,
+    system_message: str = "You are Apertus, a helpful assistant created by the SwissAI initiative.",
+) -> Dict:
+    """
+    Preprocess for Apertus model using its specific chat template with tokens:
+    <|system_start|>, <|system_end|>, <|user_start|>, <|user_end|>, <|assistant_start|>, <|assistant_end|>
+    """
+    roles = {"human": "user", "gpt": "assistant"}
+
+    # Add image token to tokenizer as a special token
+    # Use a deepcopy of tokenizer so that we don't modify the tokenizer
+    tokenizer = copy.deepcopy(tokenizer)
+    # When there is actually an image, we add the image token as a special token
+    if has_image:
+        tokenizer.add_tokens(["<image>"], special_tokens=True)
+
+    image_token_index = tokenizer.convert_tokens_to_ids("<image>")
+
+    # Get special token ids for Apertus
+    system_start_id = tokenizer.convert_tokens_to_ids("<|system_start|>")
+    system_end_id = tokenizer.convert_tokens_to_ids("<|system_end|>")
+    user_start_id = tokenizer.convert_tokens_to_ids("<|user_start|>")
+    user_end_id = tokenizer.convert_tokens_to_ids("<|user_end|>")
+    assistant_start_id = tokenizer.convert_tokens_to_ids("<|assistant_start|>")
+    assistant_end_id = tokenizer.convert_tokens_to_ids("<|assistant_end|>")
+
+    # Tokens to unmask (special tokens that should be predicted)
+    unmask_tokens_idx = [system_start_id, system_end_id, user_start_id, user_end_id, assistant_start_id, assistant_end_id]
+
+    # Apply prompt templates
+    input_ids, targets = [], []
+    for i, source in enumerate(sources):
+        if roles[source[0]["from"]] != roles["human"]:
+            source = source[1:]
+
+        input_id, target = [], []
+
+        # Build system message
+        system_tokens = tokenizer("<|system_start|>" + system_message + "<|system_end|>", add_special_tokens=False).input_ids
+        input_id += system_tokens
+        target += [IGNORE_INDEX] * len(system_tokens)
+
+        for conv in source:
+            # Make sure llava data can load
+            try:
+                role = conv["role"]
+                content = conv["content"]
+            except:
+                role = conv["from"]
+                content = conv["value"]
+
+            role = roles.get(role, role)
+
+            if role == "user":
+                # User message - mask it
+                user_tokens = tokenizer("<|user_start|>" + content + "<|user_end|>", add_special_tokens=False).input_ids
+                input_id += user_tokens
+                target += [IGNORE_INDEX] * len(user_tokens)
+            else:
+                # Assistant message - don't mask it (we want to predict this)
+                assistant_tokens = tokenizer("<|assistant_start|>" + content + "<|assistant_end|>", add_special_tokens=False).input_ids
+                input_id += assistant_tokens
+                target += assistant_tokens
+
+        assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
+
+        # Unmask special tokens and replace image tokens
+        for idx, encode_id in enumerate(input_id):
+            if encode_id in unmask_tokens_idx:
+                target[idx] = encode_id
+            if encode_id == image_token_index:
+                input_id[idx] = IMAGE_TOKEN_INDEX
+
+        input_ids.append(input_id)
+        targets.append(target)
+
+    input_ids = torch.tensor(input_ids, dtype=torch.long)
+    targets = torch.tensor(targets, dtype=torch.long)
+
+    return dict(
+        input_ids=input_ids,  # tensor(bs x seq_len)
+        labels=targets,  # tensor(bs x seq_len)
+    )
+
+def preprocess_apertus_ori(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False,
+    max_len=2048,
+    system_message: str = "You are a helpful language and vision assistant. You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language.",
+) -> Dict:
+    # roles = {"human": "<|start_header_id|>user<|end_header_id|>", "gpt": "<|start_header_id|>assistant<|end_header_id|>"}
+    roles = {"human": "user", "gpt": "assistant"}
+
+    # Add image tokens to tokenizer as a special tokens
+    # Use a deepcopy of tokenizer so that we don't modify on the tokenizer
+    tokenizer = copy.deepcopy(tokenizer)
+    # When there is actually an image, we add the image tokens as a special token
+    if has_image:
+        tokenizer.add_tokens(["<image>"], special_tokens=True)
+    image_token_index = tokenizer.convert_tokens_to_ids("<image>")
+    bos_token_id = tokenizer.convert_tokens_to_ids("<s>")
+    # start_header_id = tokenizer.convert_tokens_to_ids("<|start_header_id|>")
+    # end_header_id = tokenizer.convert_tokens_to_ids("<|end_header_id|>")
+    # eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
+
+    system_start_id = tokenizer.convert_tokens_to_ids("<|system_start|>")
+    system_end_id = tokenizer.convert_tokens_to_ids("<|system_end|>")
+    user_start_id = tokenizer.convert_tokens_to_ids("<|user_start|>")
+    user_end_id = tokenizer.convert_tokens_to_ids("<|user_end|>")
+    assistant_start_id = tokenizer.convert_tokens_to_ids("<|assistant_start|>")
+    assistant_end_id = tokenizer.convert_tokens_to_ids("<|assistant_end|>")
+    eot_id = assistant_end_id
+
+    # unmask_tokens = ["<|system_start|>", "<|system_end|>", "<|user_start|>", "<|user_end|>", "<|assistant_start|>", "<|assistant_end|>", "\n\n"]
+    # unmask_tokens_idx = [tokenizer.convert_tokens_to_ids(tok) for tok in unmask_tokens]
+
+    nl_tokens = tokenizer.convert_tokens_to_ids("\n\n")
+
+
+    # Apply prompt templates
+    input_ids, targets = [], []
+    for i, source in enumerate(sources):
+        # Skip the first one if it is not from human
+        if roles[source[0]["from"]] != roles["human"]:
+            source = source[1:]
+
+        conversations = []
+
+        # Append system message
+        conversations.append({"role": "system", "content": system_message})
+
+        # Build conversations
+        for conv in source:
+            # Make sure llava data can load
+            try:
+                role = conv["role"]
+                content = conv["content"]
+            except Exception:
+                role = conv["from"]
+                content = conv["value"]
+
+            role = roles.get(role, role)
+            conversations.append({"role": role, "content": content})
+
+        # Tokenize conversations using the chat template
+        token_ids = tokenizer.apply_chat_template(conversations)
+
+        # Start by masking everything, then unmask assistant spans only
+        target_ids = [IGNORE_INDEX] * len(token_ids)
+
+        cur_idx = 0
+        while cur_idx < len(token_ids):
+            if token_ids[cur_idx] == assistant_start_id:
+                # Unmask the assistant span including boundary tokens
+                target_ids[cur_idx] = token_ids[cur_idx]
+                cur_idx += 1
+                while cur_idx < len(token_ids) and token_ids[cur_idx] != assistant_end_id:
+                    target_ids[cur_idx] = token_ids[cur_idx]
+                    cur_idx += 1
+                if cur_idx < len(token_ids):
+                    target_ids[cur_idx] = token_ids[cur_idx]  # include </assistant>
+                    cur_idx += 1
+            else:
+                cur_idx += 1
+
+        # Replace image token placeholders in the model inputs
+        token_ids = [IMAGE_TOKEN_INDEX if tok == image_token_index else tok for tok in token_ids]
+
+        input_ids.append(token_ids)
+        targets.append(target_ids)
+
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        targets = torch.tensor(targets, dtype=torch.long)
+
+        return dict(
+            input_ids=input_ids,  # tensor(bs x seq_len)
+            labels=targets,  # tensor(bs x seq_len)
+        )
+
+        # # New version, use apply chat template
+        # # Build system message for each sentence
+        # input_id += tokenizer.apply_chat_template([{"role" : "system", "content" : system_message}])
+        # target += [IGNORE_INDEX] * len(input_id)
+
+        # for conv in source:
+        #     # Make sure llava data can load
+        #     try:
+        #         role = conv["role"]
+        #         content = conv["content"]
+        #     except:
+        #         role = conv["from"]
+        #         content = conv["value"]
+
+        #     role =  roles.get(role, role)
+
+        #     conv = [{"role" : role, "content" : content}]
+
+        #     # First is bos token we don't need here
+        #     encode_id = tokenizer.apply_chat_template(conv)[1:]
+        #     input_id += encode_id
+        #     if role in ["user", "system"]:
+        #         target += [IGNORE_INDEX] * len(encode_id)
+        #     else:
+        #         target += encode_id
+
+        # assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
+        # for idx, encode_id in enumerate(input_id):
+        #     # if encode_id in unmask_tokens_idx:
+        #     #     target[idx] = encode_id
+        #     if encode_id == image_token_index:
+        #         input_id[idx] = IMAGE_TOKEN_INDEX
+        # input_ids.append(input_id)
+        # targets.append(target)
+
+    # input_ids = torch.tensor(token_ids, dtype=torch.long)
+    # targets = torch.tensor(target_ids, dtype=torch.long)
+
+    # return dict(
+    #     input_ids=input_ids,  # tensor(bs x seq_len)
+    #     labels=targets,  # tensor(bs x seq_len)
+    # )
+
+
 def preprocess_gemma(sources: List[List[Dict[str, str]]], tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
     conv: conversation_lib.Conversation = conversation_lib.default_conversation.copy()
     roles: Dict[str, str] = {"human": conv.roles[0], "gpt": conv.roles[1]}
@@ -572,7 +800,7 @@ def preprocess_qwen(sources, tokenizer: transformers.PreTrainedTokenizer, has_im
         tokenizer.add_tokens(["<image>"], special_tokens=True)
 
     image_token_index = tokenizer.convert_tokens_to_ids("<image>")
-    im_start, im_end = tokenizer.additional_special_tokens_ids
+    im_start, im_end = tokenizer.additional_special_tokens_ids[:2] # Take the first two special tokens as im_start and im_end
     # unmask_tokens = ["<|im_start|>", "<|im_start|>", "\n"]
     unmask_tokens_idx =  [198, im_start, im_end]
     nl_tokens = tokenizer("\n").input_ids
@@ -703,8 +931,6 @@ def preprocess_llama3(
             else:
                 target += encode_id
 
-
-
         assert len(input_id) == len(target), f"{len(input_id)} != {len(target)}"
         for idx, encode_id in enumerate(input_id):
             if encode_id in unmask_tokens_idx:
@@ -722,7 +948,11 @@ def preprocess_llama3(
     )
 
 
-def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_image: bool = False) -> Dict:
+def preprocess_v1(
+    sources,
+    tokenizer: transformers.PreTrainedTokenizer,
+    has_image: bool = False
+) -> Dict:
     conv = conversation_lib.default_conversation.copy()
     roles = {"human": conv.roles[0], "gpt": conv.roles[1]}
 
@@ -741,9 +971,8 @@ def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_imag
         conversations.append(conv.get_prompt())
 
     # Tokenize conversations
-
     if has_image:
-        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors="pt") for prompt in conversations], dim=0)
+        input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
     else:
         input_ids = tokenizer(
             conversations,
@@ -793,7 +1022,10 @@ def preprocess_v1(sources, tokenizer: transformers.PreTrainedTokenizer, has_imag
         if cur_len < tokenizer.model_max_length:
             if cur_len != total_len:
                 target[:] = IGNORE_INDEX
-                print(f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}." f" (ignored)")
+                print(
+                    f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}."
+                    f" (ignored)"
+                )
 
     return dict(
         input_ids=input_ids,
@@ -914,18 +1146,24 @@ def preprocess(sources: Sequence[str], tokenizer: transformers.PreTrainedTokeniz
     """
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.PLAIN:
         return preprocess_plain(sources, tokenizer)
-    if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.LLAMA_2:
+    elif conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.LLAMA_2:
         return preprocess_llama_2(sources, tokenizer, has_image=has_image)
-    if conversation_lib.default_conversation.version.startswith("v1"):
+    elif conversation_lib.default_conversation.version.startswith("v1"):
         return preprocess_v1(sources, tokenizer, has_image=has_image)
-    if conversation_lib.default_conversation.version == "mpt":
+    elif conversation_lib.default_conversation.version == "mpt":
         return preprocess_mpt(sources, tokenizer, has_image=has_image)
-    if conversation_lib.default_conversation.version == "qwen":
+    elif conversation_lib.default_conversation.version == "qwen":
         return preprocess_qwen(sources, tokenizer, has_image=has_image)
-    if conversation_lib.default_conversation.version == "gemma":
+    elif conversation_lib.default_conversation.version == "gemma":
         return preprocess_gemma(sources, tokenizer, has_image=has_image)
-    if conversation_lib.default_conversation.version == "llama_v3":
+    elif conversation_lib.default_conversation.version == "llama_v3":
         return preprocess_llama3(sources, tokenizer, has_image=has_image)
+    elif conversation_lib.default_conversation.version == "apertus":
+        return preprocess_apertus(sources, tokenizer, has_image=has_image)
+    elif conversation_lib.default_conversation.version == "apertus_ori":
+        return preprocess_apertus_ori(sources, tokenizer, has_image=has_image)
+    else:
+        raise NotImplementedError(f"preprocess for version {conversation_lib.default_conversation.version} is not implemented.")
     # add end signal and concatenate together
     conversations = []
     for source in sources:
@@ -1247,6 +1485,11 @@ class DataCollatorForSupervisedDataset(object):
     """Collate examples for supervised fine-tuning."""
 
     tokenizer: transformers.PreTrainedTokenizer
+    printed_samples: int = 0
+    max_print_samples: int = 2  # Number of batches to print
+    zero_train_token_samples: int = 0  # Cumulative counter of dropped samples
+    total_samples_seen: int = 0  # Cumulative counter of seen samples
+    max_zero_logs: int = 5  # Avoid spamming the log
 
     def pad_sequence(self, input_ids, batch_first, padding_value):
         if self.tokenizer.padding_side == "left":
@@ -1261,6 +1504,32 @@ class DataCollatorForSupervisedDataset(object):
         # input_ids, labels, ids = tuple([instance[key] for instance in instances] for key in ("input_ids", "labels", "id"))
         input_ids = [_input_ids[: self.tokenizer.model_max_length] for _input_ids in input_ids]
         labels = [_labels[: self.tokenizer.model_max_length] for _labels in labels]
+
+        # Guard against batches where every token is ignored (would yield NaN loss)
+        train_token_counts = [int((_lbl != IGNORE_INDEX).sum().item()) for _lbl in labels]
+        self.total_samples_seen += len(train_token_counts)
+        zero_indices = [idx for idx, cnt in enumerate(train_token_counts) if cnt == 0]
+
+        if zero_indices:
+            self.zero_train_token_samples += len(zero_indices)
+            # Log a few times to confirm the root cause
+            if self.zero_train_token_samples <= self.max_zero_logs:
+                sample_ids = [instances[idx].get("id", "?") for idx in zero_indices]
+                rank0_print(
+                    f"[DataCollator] Dropping {len(zero_indices)} samples with zero trainable tokens "
+                    f"(cumulative dropped: {self.zero_train_token_samples}/{self.total_samples_seen}). "
+                    f"Sample ids: {sample_ids}"
+                )
+
+            keep_indices = [idx for idx, cnt in enumerate(train_token_counts) if cnt > 0]
+            if not keep_indices:
+                raise ValueError("All samples in the batch have zero trainable tokens; check prompts/truncation.")
+
+            # Filter out zero-token samples before padding
+            input_ids = [input_ids[idx] for idx in keep_indices]
+            labels = [labels[idx] for idx in keep_indices]
+            # Note: instances is only used for logging above; batch size can shrink here.
+
         if self.tokenizer.pad_token_id is None:
             # self.tokenizer.pad_token_id = self.tokenizer.eos_token_id  # FIXME: this could only be triggered for llama3 model.
             self.tokenizer.pad_token_id = 0 # This gets the best result. Don't know why.
@@ -1286,7 +1555,179 @@ class DataCollatorForSupervisedDataset(object):
         if "prompt" in instances[0]:
             batch["prompts"] = [instance["prompt"] for instance in instances]
 
+        # Print sample batch data for debugging/inspection
+        if self.printed_samples < self.max_print_samples:
+            self._print_sample_batch(batch, instances)
+            self.printed_samples += 1
+
         return batch
+
+    def _print_sample_batch(self, batch: Dict[str, torch.Tensor], instances: Sequence[Dict]) -> None:
+        """Print sample batch data for inspection."""
+        import sys
+        
+        # Only print on rank 0 and ensure we're in the right process
+        if local_rank not in [0, -1, None]:
+            return
+            
+        try:
+            rank0_print("\n" + "="*80)
+            rank0_print(f"SAMPLE BATCH #{self.printed_samples + 1}")
+            rank0_print("="*80)
+            sys.stdout.flush()
+            
+            # Print first sample in the batch
+            sample_idx = 0
+            if sample_idx < len(batch["input_ids"]):
+                input_ids = batch["input_ids"][sample_idx]
+                labels = batch["labels"][sample_idx]
+                attention_mask = batch["attention_mask"][sample_idx]
+                
+                rank0_print("\n")
+                rank0_print(f"\n[Sample {sample_idx}]")
+                rank0_print(f"Input IDs shape: {input_ids.shape}")
+                rank0_print(f"Labels shape: {labels.shape}")
+                rank0_print(f"Attention mask shape: {attention_mask.shape}")
+                sys.stdout.flush()
+                
+                # Decode input (full sequence)
+                rank0_print("\n--- INPUT (Full Sequence) ---")
+                try:
+                    # Handle negative IMAGE_TOKEN_INDEX for decoding
+                    input_ids_list = input_ids.tolist()
+                    image_placeholder_id = self.tokenizer.convert_tokens_to_ids("<image>")
+                    fallback_pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+                    # Replace IMAGE_TOKEN_INDEX with the real <image> token when available for readable visualization
+                    decoded_input_ids = []
+                    for tid in input_ids_list:
+                        if tid >= 0:
+                            decoded_input_ids.append(tid)
+                        else:
+                            if image_placeholder_id is not None and image_placeholder_id != self.tokenizer.unk_token_id:
+                                decoded_input_ids.append(image_placeholder_id)
+                            else:
+                                decoded_input_ids.append(fallback_pad_id)
+                    input_text = self.tokenizer.decode(decoded_input_ids, skip_special_tokens=False)
+                    rank0_print(input_text if input_text else "[EMPTY OR DECODE FAILED]")
+                except Exception as e:
+                    rank0_print(f"[ERROR decoding input: {e}]")
+                sys.stdout.flush()
+                
+                # Decode target (only non-ignored tokens)
+                rank0_print("\n--- TARGET (Labels/Output) ---")
+                try:
+                    # Replace IGNORE_INDEX with pad token for decoding
+                    labels_for_decode = labels.clone()
+                    labels_for_decode[labels_for_decode == IGNORE_INDEX] = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else 0
+                    target_text = self.tokenizer.decode(labels_for_decode.tolist(), skip_special_tokens=False)
+                    rank0_print(target_text if target_text else "[EMPTY OR DECODE FAILED]")
+                except Exception as e:
+                    rank0_print(f"[ERROR decoding target: {e}]")
+                sys.stdout.flush()
+                
+                # Show first 50 ignored and first 50 train tokens
+                rank0_print("\n--- TOKEN-LEVEL BREAKDOWN ---")
+                ignored_entries = []
+                train_entries = []
+                max_each = 50
+
+                for i in range(len(input_ids)):
+                    if len(ignored_entries) >= max_each and len(train_entries) >= max_each:
+                        break
+                    token_id = None
+                    label_id = None
+                    try:
+                        token_id = input_ids[i].item()
+                        label_id = labels[i].item()
+
+                        if token_id < 0:
+                            if token_id == IMAGE_TOKEN_INDEX:
+                                token_str = "<image>"
+                            elif token_id == IGNORE_INDEX:
+                                token_str = "<ignore>"
+                            else:
+                                token_str = f"<SPECIAL_TOKEN_{token_id}>"
+                        else:
+                            token_str = self.tokenizer.decode([token_id])
+
+                        if label_id == IGNORE_INDEX:
+                            label_str = "N/A"
+                            status = "[IGNORED]"
+                            if len(ignored_entries) < max_each:
+                                ignored_entries.append(
+                                    f"  Pos {i:3d}: {status:10s} Input: {repr(token_str):20s} (ID: {token_id:6d}) | Label: {label_str:20s} (ID: {label_id:6d})"
+                                )
+                        else:
+                            if label_id < 0:
+                                label_str = f"<SPECIAL_TOKEN_{label_id}>"
+                            else:
+                                label_str = self.tokenizer.decode([label_id])
+                            status = "[TRAIN]"
+                            if len(train_entries) < max_each:
+                                train_entries.append(
+                                    f"  Pos {i:3d}: {status:10s} Input: {repr(token_str):20s} (ID: {token_id:6d}) | Label: {repr(label_str):20s} (ID: {label_id:6d})"
+                                )
+                    except Exception as e:
+                        err_entry = f"  Pos {i:3d}: [ERROR: {e}]"
+                        if label_id == IGNORE_INDEX and len(ignored_entries) < max_each:
+                            ignored_entries.append(err_entry)
+                        elif label_id is None:
+                            # If label_id could not be read, log under ignored bucket first
+                            if len(ignored_entries) < max_each:
+                                ignored_entries.append(err_entry)
+                        elif len(train_entries) < max_each:
+                            train_entries.append(err_entry)
+
+                rank0_print("  First 50 [IGNORED] tokens:")
+                if ignored_entries:
+                    for entry in ignored_entries:
+                        rank0_print(entry)
+                else:
+                    rank0_print("    None found")
+
+                rank0_print("  First 50 [TRAIN] tokens:")
+                if train_entries:
+                    for entry in train_entries:
+                        rank0_print(entry)
+                else:
+                    rank0_print("    None found")
+
+                sys.stdout.flush()
+                
+                # Statistics
+                num_train_tokens = (labels != IGNORE_INDEX).sum().item()
+                num_total_tokens = len(labels)
+                num_ignored_tokens = num_total_tokens - num_train_tokens
+                
+                rank0_print("\n--- STATISTICS ---")
+                rank0_print(f"Total tokens: {num_total_tokens}")
+                rank0_print(f"Training tokens: {num_train_tokens} ({100*num_train_tokens/num_total_tokens:.1f}%)")
+                rank0_print(f"Ignored tokens: {num_ignored_tokens} ({100*num_ignored_tokens/num_total_tokens:.1f}%)")
+                sys.stdout.flush()
+                
+                # Image/video information
+                if "images" in batch:
+                    rank0_print(f"\n--- MULTIMODAL INFO ---")
+                    if isinstance(batch["images"], list):
+                        rank0_print(f"Number of images/videos: {len(batch['images'])}")
+                        if len(batch["images"]) > 0:
+                            rank0_print(f"First image/video shape: {batch['images'][0].shape}")
+                    else:
+                        rank0_print(f"Images shape: {batch['images'].shape}")
+                    
+                    if "modalities" in batch:
+                        rank0_print(f"Modalities: {batch['modalities']}")
+                    if "image_sizes" in batch:
+                        rank0_print(f"Image sizes: {batch['image_sizes']}")
+                    sys.stdout.flush()
+            
+            rank0_print("\n" + "="*80 + "\n")
+            sys.stdout.flush()
+        except Exception as e:
+            rank0_print(f"\n[ERROR in _print_sample_batch: {e}]\n")
+            import traceback
+            traceback.print_exc()
+            sys.stdout.flush()
 
 
 def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer, data_args) -> Dict:
@@ -1435,6 +1876,15 @@ def get_model(model_args, training_args, bnb_model_from_pretrained_args):
                 low_cpu_mem_usage=False,
                 **customized_kwargs,
             )
+        elif "apertus" in model_args.model_name_or_path.lower():
+            model = LlavaApertusForCausalLM.from_pretrained(
+                model_args.model_name_or_path,
+                cache_dir=training_args.cache_dir,
+                attn_implementation=training_args.attn_implementation,
+                torch_dtype=(torch.bfloat16 if training_args.bf16 else None),
+                low_cpu_mem_usage=False,
+                **customized_kwargs,
+            )
         else:
             raise ValueError(f"Unknown model class {model_args}")
     else:
@@ -1550,6 +2000,13 @@ def train(attn_implementation=None):
             model_max_length=training_args.model_max_length,
             padding_side="right",
             use_fast=False,
+        )
+    elif "apertus" in model_args.model_name_or_path.lower():
+        tokenizer = transformers.AutoTokenizer.from_pretrained(
+            model_args.model_name_or_path,
+            cache_dir=training_args.cache_dir,
+            model_max_length=training_args.model_max_length,
+            padding_side="right",
         )
 
     rank0_print(f"Prompt version: {model_args.version}")

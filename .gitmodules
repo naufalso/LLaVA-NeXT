@@ -1,0 +1,4 @@
+[submodule "open_flamingo"]
+	path = open_flamingo
+	url = https://github.com/naufalso/open_flamingo
+	branch = llava_next_eval

@@ -27,8 +27,10 @@ checkpoints
 project_checkpoints
 debug_checkpoints
 playground/data
+playground/models
 playground/cc3m_llava34b_cap
 ckpts*
+results_debug/
 
 .ipynb_checkpoints
 chunyl_scripts

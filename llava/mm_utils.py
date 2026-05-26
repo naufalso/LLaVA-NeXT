@@ -257,7 +257,10 @@ def process_anyres_image(image, processor, grid_pinpoints):
         try:
             patch_size = processor.size[0]
         except Exception as e:
-            patch_size = processor.size["shortest_edge"]
+            if isinstance(processor.size, dict):
+                patch_size = processor.size.get("shortest_edge", processor.size.get("height"))
+            else:
+                patch_size = processor.size
         assert patch_size in [224, 336, 384, 448, 512], "patch_size should be in [224, 336, 384, 448, 512]"
         # Use regex to extract the range from the input string
         matches = re.findall(r"\((\d+)x(\d+)\)", grid_pinpoints)
@@ -275,13 +278,17 @@ def process_anyres_image(image, processor, grid_pinpoints):
     best_resolution = select_best_resolution(image.size, possible_resolutions)
     image_padded = resize_and_pad_image(image, best_resolution)
 
-    patches = divide_to_patches(image_padded, processor.crop_size["height"])
+    if isinstance(processor.crop_size, dict):
+        resize_height = processor.crop_size.get("height", processor.crop_size.get("shortest_edge"))
+    else:
+        resize_height = processor.crop_size
+    patches = divide_to_patches(image_padded, resize_height)
 
     # FIXME: this seems to be a bug that it resizes instead of pad.
     # but to keep it consistent with previous, i will keep it as it is
     # TODO: uncomment below to ablate with the padding
     if isinstance(processor.size, dict):
-        shortest_edge = processor.size["shortest_edge"]
+        shortest_edge = processor.size.get("shortest_edge", processor.size.get("height"))
     else:
         shortest_edge = min(processor.size)
     image_original_resize = image.resize((shortest_edge, shortest_edge))
@@ -313,14 +320,17 @@ def expand2square(pil_img, background_color):
 
 def process_images(images, image_processor, model_cfg):
     image_aspect_ratio = getattr(model_cfg, "image_aspect_ratio", None)
+    # print(f"[DEBUG] Processing images with aspect ratio setting: {image_aspect_ratio}")
     new_images = []
     if image_aspect_ratio == "highres":
         for image in images:
             image = process_highres_image(image, image_processor, model_cfg.image_grid_pinpoints)
             new_images.append(image)
     elif image_aspect_ratio == "anyres" or "anyres_max" in image_aspect_ratio:
+        # print(f"[DEBUG] Image Dimensions before anyres processing: {[image.size for image in images]}")
         for image in images:
             image = process_anyres_image(image, image_processor, model_cfg.image_grid_pinpoints)
+            # print(f"[DEBUG] Processed image shape: {image.shape}")
             new_images.append(image)
     elif image_aspect_ratio == "crop_split":
         for image in images:
@@ -334,7 +344,9 @@ def process_images(images, image_processor, model_cfg):
     else:
         return image_processor.preprocess(images, return_tensors="pt")["pixel_values"]
     if all(x.shape == new_images[0].shape for x in new_images):
+        # print(f"[DEBUG] All processed images have the same shape: {new_images[0].shape}")
         new_images = torch.stack(new_images, dim=0)
+        # print(f"[DEBUG] Stacked new_images shape: {new_images.shape}")
     return new_images
 
 
