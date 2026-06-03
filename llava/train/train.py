@@ -46,7 +46,6 @@ from llava import conversation as conversation_lib
 from llava.model import *
 from llava.mm_utils import process_highres_image, process_anyres_image, process_highres_image_crop_split, tokenizer_image_token
 from llava.utils import rank0_print, process_video_with_pyav, process_video_with_decord
-
 torch.multiprocessing.set_sharing_strategy("file_system")
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -1193,6 +1192,29 @@ def preprocess(sources: Sequence[str], tokenizer: transformers.PreTrainedTokeniz
     return dict(input_ids=input_ids, labels=targets)
 
 
+def truncate_data_dict_to_max_length(data_dict: Dict, tokenizer: transformers.PreTrainedTokenizer) -> Dict:
+    max_len = getattr(tokenizer, "model_max_length", None)
+    if not isinstance(max_len, int) or max_len <= 0 or max_len > 100000:
+        return data_dict
+    if "input_ids" not in data_dict or "labels" not in data_dict:
+        return data_dict
+
+    def _truncate_tensor(value):
+        if isinstance(value, list):
+            return [_truncate_tensor(item) for item in value]
+        if not hasattr(value, "dim"):
+            return value
+        if value.dim() == 1:
+            return value[:max_len]
+        if value.dim() == 2:
+            return value[:, :max_len]
+        return value
+
+    data_dict["input_ids"] = _truncate_tensor(data_dict["input_ids"])
+    data_dict["labels"] = _truncate_tensor(data_dict["labels"])
+    return data_dict
+
+
 class LazySupervisedDataset(Dataset):
     def __init__(self, data_path: str, tokenizer: transformers.PreTrainedTokenizer, data_args: DataArguments):
         super(LazySupervisedDataset, self).__init__()
@@ -1262,6 +1284,25 @@ class LazySupervisedDataset(Dataset):
 
                     rank0_print(f"Loaded {len(cur_data_dict)} samples from {json_path}")
                     self.list_data_dict.extend(cur_data_dict)
+        # Check if the dataset is in jsonl format
+        elif data_path.endswith(".jsonl"):
+            data_args.dataset_paths = [data_path]
+            rank0_print(f"Loading {data_path}")
+            # Try to use tqdm to read the jsonl file, if it fails, use normal open
+            count = 0
+            with open(data_path, "r") as file:
+                # try:
+                #     from tqdm import tqdm
+
+                #     file = tqdm(file, desc="Loading jsonl")
+                # except ImportError:
+                #     pass
+                for line in file:
+                    self.list_data_dict.append(json.loads(line.strip()))
+                    count += 1
+                    if count % 100000 == 0:
+                        rank0_print(f"Loaded {count} samples from {data_path}")
+            rank0_print(f"Loaded {len(self.list_data_dict)} samples from {data_path}")
         else:
             data_args.dataset_paths = [data_path]
             rank0_print(f"Loading {data_path}")
@@ -1460,6 +1501,8 @@ class LazySupervisedDataset(Dataset):
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0], labels=data_dict["labels"][0])
 
+        data_dict = truncate_data_dict_to_max_length(data_dict, self.tokenizer)
+
         # image exist in the data
         if "image" in self.list_data_dict[i]:
             data_dict["image"] = image
@@ -1490,6 +1533,8 @@ class DataCollatorForSupervisedDataset(object):
     zero_train_token_samples: int = 0  # Cumulative counter of dropped samples
     total_samples_seen: int = 0  # Cumulative counter of seen samples
     max_zero_logs: int = 5  # Avoid spamming the log
+    mm_mismatch_samples: int = 0  # Cumulative counter of image/token mismatches
+    max_mm_mismatch_logs: int = 10  # Avoid spamming mismatch logs
 
     def pad_sequence(self, input_ids, batch_first, padding_value):
         if self.tokenizer.padding_side == "left":
@@ -1525,14 +1570,57 @@ class DataCollatorForSupervisedDataset(object):
             if not keep_indices:
                 raise ValueError("All samples in the batch have zero trainable tokens; check prompts/truncation.")
 
-            # Filter out zero-token samples before padding
+            # Filter out zero-token samples before padding.
+            # Important: instances must be filtered too, otherwise images/modalities/image_sizes
+            # become misaligned with input_ids and labels.
             input_ids = [input_ids[idx] for idx in keep_indices]
             labels = [labels[idx] for idx in keep_indices]
-            # Note: instances is only used for logging above; batch size can shrink here.
+            instances = [instances[idx] for idx in keep_indices]
+
+        # Align each sample's image list with the number of <image> tokens
+        # after truncation and after zero-token filtering.
+        #
+        # This prevents cur_image_idx drift in prepare_inputs_labels_for_multimodal.
+        for idx, instance in enumerate(instances):
+            if "image" not in instance:
+                continue
+
+            required_images = int((input_ids[idx] == IMAGE_TOKEN_INDEX).sum().item())
+
+            # LLaVA keeps one dummy image feature for text-only samples in multimodal mode.
+            # So zero image tokens still expects one placeholder image entry if "image" exists.
+            required_images = max(1, required_images)
+
+            cur_images = instance["image"]
+
+            if len(cur_images) == required_images:
+                continue
+
+            self.mm_mismatch_samples += 1
+            if self.mm_mismatch_samples <= self.max_mm_mismatch_logs:
+                rank0_print(
+                    f"[DataCollator] Image/token mismatch for sample id={instance.get('id', '?')}: "
+                    f"{len(cur_images)} image entries but {required_images} required by IMAGE_TOKEN_INDEX count. "
+                    f"Fixing in collator. "
+                    f"(mismatch count: {self.mm_mismatch_samples})"
+                )
+
+            if len(cur_images) > required_images:
+                # Too many images for the number of <image> tokens.
+                # Example: image list has 2 files but prompt has only one <image>.
+                instance["image"] = cur_images[:required_images]
+            elif len(cur_images) > 0:
+                # Too few images for the number of <image> tokens.
+                # Repeat the last image as a fallback so training does not crash.
+                instance["image"] = cur_images + [cur_images[-1]] * (required_images - len(cur_images))
+            else:
+                raise ValueError(
+                    f"Sample id={instance.get('id', '?')} has IMAGE_TOKEN_INDEX tokens "
+                    "but an empty image list."
+                )
 
         if self.tokenizer.pad_token_id is None:
-            # self.tokenizer.pad_token_id = self.tokenizer.eos_token_id  # FIXME: this could only be triggered for llama3 model.
-            self.tokenizer.pad_token_id = 0 # This gets the best result. Don't know why.
+            self.tokenizer.pad_token_id = 0
         input_ids = self.pad_sequence(input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
         labels = self.pad_sequence(labels, batch_first=True, padding_value=IGNORE_INDEX)
         batch = dict(input_ids=input_ids, labels=labels.long() if labels.dtype == torch.int32 else labels, attention_mask=input_ids.ne(self.tokenizer.pad_token_id))

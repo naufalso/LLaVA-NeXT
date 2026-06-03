@@ -491,50 +491,105 @@ class LlavaMetaForCausalLM(ABC):
         new_input_embeds = []
         new_labels = []
         cur_image_idx = 0
+        num_image_features = len(image_features) if image_features is not None else 0
+
         # rank_print("Inserting Images embedding")
         for batch_idx, cur_input_ids in enumerate(input_ids):
-            num_images = (cur_input_ids == IMAGE_TOKEN_INDEX).sum()
+            num_images = int((cur_input_ids == IMAGE_TOKEN_INDEX).sum().item())
             # rank0_print(num_images)
             if num_images == 0:
-                cur_image_features = image_features[cur_image_idx]
                 cur_input_embeds_1 = self.get_model().embed_tokens(cur_input_ids)
-                cur_input_embeds = torch.cat([cur_input_embeds_1, cur_image_features[0:0]], dim=0)
+
+                # Text-only samples may not have a corresponding encoded image feature.
+                # Avoid indexing past image_features.
+                if cur_image_idx < num_image_features:
+                    cur_image_features = image_features[cur_image_idx]
+                    empty_image_features = cur_image_features[0:0]
+                    cur_image_idx += 1
+                else:
+                    empty_image_features = cur_input_embeds_1.new_empty(
+                        (0, cur_input_embeds_1.shape[-1])
+                    )
+
+                empty_image_features = empty_image_features.to(
+                    device=cur_input_embeds_1.device,
+                    dtype=cur_input_embeds_1.dtype,
+                )
+
+                cur_input_embeds = torch.cat(
+                    [cur_input_embeds_1, empty_image_features],
+                    dim=0,
+                )
                 new_input_embeds.append(cur_input_embeds)
                 new_labels.append(labels[batch_idx])
-                cur_image_idx += 1
                 continue
 
-            image_token_indices = [-1] + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist() + [cur_input_ids.shape[0]]
-            cur_input_ids_noim = []
+            image_token_indices = (
+                [-1]
+                + torch.where(cur_input_ids == IMAGE_TOKEN_INDEX)[0].tolist()
+                + [cur_input_ids.shape[0]]
+            )
+
             cur_labels = labels[batch_idx]
-            cur_labels_noim = []
-            for i in range(len(image_token_indices) - 1):
-                cur_input_ids_noim.append(cur_input_ids[image_token_indices[i] + 1 : image_token_indices[i + 1]])
-                cur_labels_noim.append(cur_labels[image_token_indices[i] + 1 : image_token_indices[i + 1]])
-            split_sizes = [x.shape[0] for x in cur_labels_noim]
-            cur_input_embeds = self.get_model().embed_tokens(torch.cat(cur_input_ids_noim))
-            cur_input_embeds_no_im = torch.split(cur_input_embeds, split_sizes, dim=0)
             cur_new_input_embeds = []
             cur_new_labels = []
 
-            for i in range(num_images + 1):
-                cur_new_input_embeds.append(cur_input_embeds_no_im[i])
-                cur_new_labels.append(cur_labels_noim[i])
-                if i < num_images:
-                    try:
+            for i in range(len(image_token_indices) - 1):
+                start = image_token_indices[i] + 1
+                end = image_token_indices[i + 1]
+
+                cur_text_ids = cur_input_ids[start:end]
+                cur_text_labels = cur_labels[start:end]
+
+                if cur_text_ids.numel() > 0:
+                    cur_text_embeds = self.get_model().embed_tokens(cur_text_ids)
+                else:
+                    hidden_size = self.get_model().embed_tokens.weight.shape[1]
+                    cur_text_embeds = self.get_model().embed_tokens.weight.new_empty(
+                        (0, hidden_size)
+                    )
+
+                cur_new_input_embeds.append(cur_text_embeds)
+                cur_new_labels.append(cur_text_labels)
+
+                # Insert image features after each <image> token, except after the final text chunk.
+                if i < len(image_token_indices) - 2:
+                    if cur_image_idx < num_image_features:
                         cur_image_features = image_features[cur_image_idx]
-                    except IndexError:
-                        cur_image_features = image_features[cur_image_idx - 1]
+                    elif num_image_features > 0:
+                        # Malformed sample: more <image> tokens than encoded images.
+                        # Reuse the final available image feature as a fallback.
+                        cur_image_features = image_features[num_image_features - 1]
+                    else:
+                        hidden_size = self.get_model().embed_tokens.weight.shape[1]
+                        cur_image_features = self.get_model().embed_tokens.weight.new_empty(
+                            (0, hidden_size)
+                        )
+
                     cur_image_idx += 1
                     cur_new_input_embeds.append(cur_image_features)
-                    cur_new_labels.append(torch.full((cur_image_features.shape[0],), IGNORE_INDEX, device=cur_labels.device, dtype=cur_labels.dtype))
+                    cur_new_labels.append(
+                        torch.full(
+                            (cur_image_features.shape[0],),
+                            IGNORE_INDEX,
+                            device=cur_labels.device,
+                            dtype=cur_labels.dtype,
+                        )
+                    )
+
+            if len(cur_new_input_embeds) == 0:
+                # Extremely defensive fallback. This should not normally happen.
+                cur_new_input_embeds = [self.get_model().embed_tokens(cur_input_ids)]
+                cur_new_labels = [cur_labels]
 
             target_dtype = self.get_model().embed_tokens.weight.dtype
-            cur_new_input_embeds = [x.to(device=self.device, dtype=target_dtype) for x in cur_new_input_embeds]
+            cur_new_input_embeds = [
+                x.to(device=self.device, dtype=target_dtype)
+                for x in cur_new_input_embeds
+            ]
 
-            # import pdb; pdb.set_trace()
-            cur_new_input_embeds = torch.cat(cur_new_input_embeds)
-            cur_new_labels = torch.cat(cur_new_labels)
+            cur_new_input_embeds = torch.cat(cur_new_input_embeds, dim=0)
+            cur_new_labels = torch.cat(cur_new_labels, dim=0)
 
             new_input_embeds.append(cur_new_input_embeds)
             new_labels.append(cur_new_labels)
@@ -543,8 +598,12 @@ class LlavaMetaForCausalLM(ABC):
         tokenizer_model_max_length = getattr(self.config, "tokenizer_model_max_length", None)
         # rank_print("Finishing Inserting")
 
-        new_input_embeds = [x[:tokenizer_model_max_length] for x, modality in zip(new_input_embeds, modalities)]
-        new_labels = [x[:tokenizer_model_max_length] for x, modality in zip(new_labels, modalities)]
+        if tokenizer_model_max_length is not None:
+            new_input_embeds = [x[:tokenizer_model_max_length] for x in new_input_embeds]
+            new_labels = [x[:tokenizer_model_max_length] for x in new_labels]
+        # new_input_embeds = [x[:tokenizer_model_max_length] for x, modality in zip(new_input_embeds, modalities)]
+        # new_labels = [x[:tokenizer_model_max_length] for x, modality in zip(new_labels, modalities)]
+
         # TODO: Hard code for control loss spike
         # if tokenizer_model_max_length is not None:
         #     new_input_embeds = [x[:4096] if modality != "video" else x[:tokenizer_model_max_length] for x, modality in zip(new_input_embeds, modalities)]

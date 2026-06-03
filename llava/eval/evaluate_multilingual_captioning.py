@@ -97,6 +97,8 @@ def main(args: argparse.Namespace) -> None:
 		conv_mode = "llava_llama_3"
 	elif "qwen25" in model_name.lower():
 		conv_mode = "qwen_2_5"
+	elif "qwen" in model_name.lower():
+		conv_mode = "qwen_2"
 	elif "apertus" in model_name.lower():
 		conv_mode = "apertus_ori"
 	elif "llama-2" in model_name.lower():
