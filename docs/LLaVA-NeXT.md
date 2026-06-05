@@ -59,7 +59,10 @@ print(text_outputs)
 
 **Install the evaluation package:**
 ```bash
-# make sure you installed the LLaVA-NeXT model files via outside REAME.md
+# Option 1: Install from the included submodule (recommended for development)
+bash scripts/setup_lmms_eval.sh
+
+# Option 2: Install directly from GitHub
 pip install git+https://github.com/EvolvingLMMs-Lab/lmms-eval.git
 ```
 

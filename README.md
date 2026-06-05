@@ -111,8 +111,13 @@
 
 #### 1. **Clone this repository and navigate to the LLaVA folder:**
 ```bash
-git clone https://github.com/LLaVA-VL/LLaVA-NeXT
+git clone --recurse-submodules https://github.com/LLaVA-VL/LLaVA-NeXT
 cd LLaVA-NeXT
+```
+
+If you have already cloned without `--recurse-submodules`, initialize the submodules with:
+```bash
+git submodule update --init --recursive
 ```
 
 #### 2. **Install the inference package:**
@@ -122,6 +127,16 @@ conda activate llava
 pip install --upgrade pip  # Enable PEP 660 support.
 pip install -e ".[train]"
 ```
+
+#### 3. **Install lmms-eval from the submodule (for evaluation):**
+
+The [lmms-eval](https://github.com/EvolvingLMMs-Lab/lmms-eval) framework is included as a git submodule. Install it in editable mode so you can make local modifications:
+
+```bash
+bash scripts/setup_lmms_eval.sh
+```
+
+This enables running LLaVA Apertus evaluations directly from the submodule (see [Evaluation with lmms-eval](#evaluation-with-lmms-eval) below).
 
 ### Project Navigation
 Please checkout the following page for more inference & evaluation details.
@@ -138,6 +153,22 @@ Please checkout the following page for more inference & evaluation details.
 
 #### - LLaVA-NeXT: Tackling Multi-image, Video, and 3D in Large Multimodal Models
 - [LLaVA-NeXT-Interleave](./docs/LLaVA-NeXT-Interleave.md): for multi-image demo and evaluation scripts.
+
+### Evaluation with lmms-eval
+
+The [lmms-eval](https://github.com/EvolvingLMMs-Lab/lmms-eval) framework is included as a git submodule under `lmms-eval/`. This allows you to develop custom evaluation tasks and run evaluations for LLaVA Apertus models locally.
+
+**Quick start** (after completing the installation steps above):
+
+```bash
+# Run evaluation on default benchmark tasks
+bash scripts/eval/run_lmms_eval.sh /path/to/llava-next-apertus-8b-finetune-full
+
+# Run on specific tasks with 4 GPUs
+bash scripts/eval/run_lmms_eval.sh /path/to/model "ai2d,chartqa,mme" 4
+```
+
+Since `lmms-eval` is installed in editable mode from the submodule, you can modify or add evaluation tasks directly in the `lmms-eval/` directory and your changes will take effect immediately. See the [lmms-eval documentation](https://github.com/EvolvingLMMs-Lab/lmms-eval#readme) for details on creating custom tasks.
 
 ## SGLang for SpeedUp Inference and Deployment
 
